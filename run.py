@@ -33,14 +33,41 @@ PICKUPS, DROPOFFS = M.stations(W)                           # 물류 지점(rack
 SPAWN = C.package_spawner(PICKUPS, DROPOFFS, every=2, per=1)  # 끝없는 물류
 _BR = __import__("random").Random(7)
 BURST = {1: [C.Task(f"B{i}", _BR.choice(PICKUPS), _BR.choice(DROPOFFS)) for i in range(N + 8)]}  # 초기 일괄투입=전 로봇 즉시 가동
+def _connected(w, blocked):                                                # 폐쇄 후 맵이 한 덩어리인지(분단 방지)
+    from collections import deque
+    free = [(x, y) for y in range(w.height) for x in range(w.width) if w.is_free((x, y)) and (x, y) not in blocked]
+    if not free:
+        return False
+    seen, q = {free[0]}, deque([free[0]])
+    while q:
+        x, y = q.popleft()
+        for n in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+            if w.is_free(n) and n not in blocked and n not in seen:
+                seen.add(n)
+                q.append(n)
+    return len(seen) == len(free)
+
+
+def _closures(w):                                                          # 다양한 폐쇄 후보 — 위치·방향(세로/가로) 다양, 각각 세그먼트라 연결성 유지
+    cands = []
+    for cx in range(5, w.width - 4, 3):                                    # 세로 세그먼트(여러 x)
+        seg = [(cx, y) for y in range(3, w.height - 3) if w.is_free((cx, y))]
+        if len(seg) >= 4 and _connected(w, set(seg)):
+            cands.append(seg)
+    for cy in range(4, w.height - 4, 3):                                   # 가로 세그먼트(여러 y)
+        seg = [(x, cy) for x in range(3, w.width - 3) if w.is_free((x, cy))]
+        if len(seg) >= 4 and _connected(w, set(seg)):
+            cands.append(seg)
+    return cands or [[(_CX, y) for y in range(3, w.height - 3) if w.is_free((_CX, y))]]
+
+
 _CX = W.width // 2
-# 통로 세그먼트만 폐쇄(양끝 마진 개방) — 열 전체를 닫으면 맵이 분단돼 건너편 로봇이 못 움직임.
-# 세그먼트면 연결 유지 → 로봇이 폐쇄 앞까지 와서 우회(사용자 지적 반영).
-AISLE = [(_CX, y) for y in range(3, W.height - 3) if W.is_free((_CX, y))]
+_CANDS = _closures(W)                                                      # 연결성 유지되는 다양한 폐쇄들
 FAULTS = {t: f"r{(t // 90) % N}" for t in range(90, 10 ** 7, 90)}          # 90tick마다 한 대 고장(→회복)
 OBST = {}
-for _c in range(0, 10 ** 7, 300):                                          # 중앙 통로 주기적 폐쇄→개방
-    OBST[_c + 120], OBST[_c + 220] = ("close", AISLE), ("open", AISLE)
+for _k in range(0, 200000, 200):                                          # 200tick 주기로 다른 위치·방향 폐쇄 순환
+    _c = _CANDS[(_k // 200) % len(_CANDS)]
+    OBST[_k + 120], OBST[_k + 240] = ("close", _c), ("open", _c)
 
 
 def robots():
