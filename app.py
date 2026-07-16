@@ -82,27 +82,28 @@ DASHBOARD_HTML = """<!doctype html>
 <meta charset="utf-8">
 <title>FMS Console</title>
 <style>
- body{font-family:ui-monospace,Menlo,Consolas,monospace;background:#0e1116;color:#e6edf3;margin:0;padding:24px}
- h1{font-size:18px;margin:0 0 4px} .sub{color:#7d8590;font-size:12px;margin-bottom:12px}
- .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#3fb950;margin-right:6px}
+ body{font-family:ui-monospace,Menlo,Consolas,monospace;background:#0e1116;color:#e6edf3;margin:0;padding:24px;font-size:14px}
+ h1{font-size:21px;margin:0 0 4px} .sub{color:#8b949e;font-size:13px;margin-bottom:14px}
+ .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#3fb950;margin-right:6px}
  .dot.off{background:#f85149}
- .alert{background:#3d1416;border:1px solid #f85149;color:#ffb3b3;border-radius:6px;padding:6px 12px;margin-bottom:10px;font-size:13px;display:none}
+ .alert{background:#3d1416;border:1px solid #f85149;color:#ffb3b3;border-radius:6px;padding:8px 14px;margin-bottom:12px;font-size:14px;display:none}
  .wrap{display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap}
  #viz{width:48%;flex:0 0 48%;height:auto;display:block}
  canvas{background:#0b0e13;border:1px solid #21262d;border-radius:8px;max-width:100%}
- .panel{flex:1;min-width:300px;margin-top:0}
- .logs{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px 24px;margin-top:10px;align-items:start}
- .ctrl{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;font-size:12px;color:#7d8590}
- .ctrl button{background:#161b22;border:1px solid #30363d;color:#e6edf3;border-radius:5px;padding:3px 9px;cursor:pointer;font:inherit}
+ .panel{flex:1;min-width:320px;margin-top:0}
+ .logs{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:14px 24px;margin-top:14px;align-items:start}
+ .ctrl{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;font-size:13px;color:#adbac7}
+ .ctrl button{background:#161b22;border:1px solid #30363d;color:#e6edf3;border-radius:5px;padding:5px 11px;cursor:pointer;font:inherit}
  .ctrl button.on{background:#1f6feb;border-color:#1f6feb}
- .kpi{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:12px}
- .kpi .k{background:#161b22;border:1px solid #21262d;border-radius:6px;padding:8px 12px;min-width:74px}
- .kpi .v{font-size:20px;font-variant-numeric:tabular-nums} .kpi .l{color:#7d8590;font-size:11px}
- .bar{display:flex;height:16px;border-radius:4px;overflow:hidden;margin:4px 0 10px;background:#161b22}
- .bar span{display:block} .legend{color:#7d8590;font-size:12px;display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px}
- .sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;vertical-align:middle}
- .count{color:#7d8590;font-size:12px} .events{color:#8b949e;font-size:12px;white-space:pre-line;max-height:260px;overflow:auto;
-   border-top:1px solid #21262d;padding-top:8px;margin-top:8px}
+ .kpi{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+ .kpi .k{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:10px 15px;min-width:84px}
+ .kpi .v{font-size:27px;font-variant-numeric:tabular-nums;line-height:1.1;font-weight:600} .kpi .l{color:#adbac7;font-size:12px;margin-top:3px}
+ .bar{display:flex;height:22px;border-radius:5px;overflow:hidden;margin:6px 0 12px;background:#161b22}
+ .bar span{display:block} .legend{color:#c9d1d9;font-size:13px;display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px}
+ .sw{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:5px;vertical-align:middle}
+ .ttl{font-size:13px;color:#8b949e;margin:0 0 4px;font-weight:600}
+ .count{color:#c9d1d9;font-size:13.5px;line-height:1.7} .events{color:#c9d1d9;font-size:13.5px;line-height:1.75;white-space:pre-line;max-height:320px;overflow:auto;
+   border-top:1px solid #21262d;padding-top:10px;margin-top:10px}
 </style>
 <h1>🤖 FMS Console — 다중 로봇 관제 (현업 규모·연속 물류)</h1>
 <div class="sub"><span id="dot" class="dot off"></span><span id="status">연결 대기…</span> · 폴링 250ms · DB <span id="db">0</span>행</div>
@@ -132,18 +133,26 @@ DASHBOARD_HTML = """<!doctype html>
   </div>
   <div class="logs">
    <div>
+    <div class="ttl">📊 처리 흐름</div>
     <div class="count" id="count"></div>
     <div class="count" id="oneway" style="margin-top:6px;color:#a5d6ff"></div>
-    <canvas id="spark" width="300" height="46" style="margin-top:8px;display:block;width:100%;background:#0b0e13;border:1px solid #21262d;border-radius:4px"></canvas>
-    <div class="count" id="sparklbl" style="margin-top:2px"></div>
+    <canvas id="spark" width="320" height="88" style="margin-top:10px;display:block;width:100%;background:#0b0e13;border:1px solid #21262d;border-radius:6px"></canvas>
+    <div class="count" id="sparklbl" style="margin-top:4px"></div>
    </div>
-   <div class="count" id="blocked" style="white-space:pre-line;color:#f0883e;max-height:180px;overflow:auto"></div>
    <div>
-    <div class="count" id="drill" style="white-space:pre-line;color:#8b949e"></div>
-    <div class="count" id="nav" style="margin-top:8px;white-space:pre-line;color:#a5d6ff;max-height:150px;overflow:auto"></div>
-    <div class="count" style="margin-top:4px"><a href="/trace.jsonl" style="color:#7d8590">주행 트레이스 다운로드(.jsonl)</a></div>
+    <div class="ttl">⚠ 개입 필요(도달불가)</div>
+    <div class="count" id="blocked" style="white-space:pre-line;color:#f0883e;max-height:220px;overflow:auto"></div>
    </div>
-   <div class="events" id="events" style="border-top:none;margin-top:0;padding-top:0"></div>
+   <div>
+    <div class="ttl">🧭 자동주행 결정</div>
+    <div class="count" id="drill" style="white-space:pre-line;color:#79c0ff;margin-bottom:6px"></div>
+    <div class="count" id="nav" style="white-space:pre-line;color:#a5d6ff;max-height:200px;overflow:auto"></div>
+    <div class="count" style="margin-top:6px"><a href="/trace.jsonl" style="color:#8b949e">주행 트레이스 다운로드(.jsonl)</a></div>
+   </div>
+   <div>
+    <div class="ttl">📜 이벤트</div>
+    <div class="events" id="events" style="border-top:none;margin-top:0;padding-top:0"></div>
+   </div>
   </div>
  </div>
 </div>
@@ -192,11 +201,12 @@ async function poll(){
   // 차단(개입 필요) 큐 — 도달불가 태스크
   const bq=STATE.blocked_queue||[];
   document.getElementById('blocked').textContent = bq.length?
-    `⚠ 개입 필요(도달불가) ${bq.length}건:\\n`+bq.slice(-8).map(q=>`  ${q.id} 픽업(${q.pickup})→배송(${q.dropoff})`).join('\\n') : '';
+    `${bq.length}건\\n`+bq.slice(-8).map(q=>`${q.id}  픽업${q.pickup}→배송${q.dropoff}`).join('\\n') : '없음';
   // 처리량/백로그 시계열 축적 + 스파크라인
   if(mt.ticks!=null){ SPARK.push([mt.throughput??0, mt.active??0]); if(SPARK.length>120) SPARK.shift(); }
   drawSpark();
-  document.getElementById('sparklbl').textContent = `처리량 ${mt.throughput??0}/t · 대기물류 ${mt.active??0}`;
+  document.getElementById('sparklbl').innerHTML =
+    `<span style="color:#3fb950">▬ 처리량 ${mt.throughput??0}/t</span>&nbsp;&nbsp;<span style="color:#e3b341">▬ 대기물류 ${mt.active??0}</span>`;
   // 로봇 드릴다운(선택 로봇 상세 — 우선순위 포함)
   if(SEL){ const sr=R.find(r=>r.id===SEL);
     let head = sr? `🔍 ${SEL} · 우선순위 p${sr.pr}(유효 ${sr.eff}, 대기 ${sr.stuck}t) · ${sr.status}`
@@ -209,7 +219,7 @@ async function poll(){
   const NAVKO={reroute:"혼잡 재경로", yield_idle:"유휴 양보", deadlock:"교착 해소"};
   const nv=STATE.nav_trace||[];
   document.getElementById('nav').textContent = nv.length?
-    '🧭 주행 결정(최근):\\n'+nv.slice(-8).reverse().map(r=>`  t${r.tick} ${NAVKO[r.kind]||r.kind} ${r.robot||''}${r.cause?' ('+r.cause+')':''}`).join('\\n') : '';
+    nv.slice(-10).reverse().map(r=>`t${r.tick} ${NAVKO[r.kind]||r.kind} ${r.robot||''}${r.cause?' ('+r.cause+')':''}`).join('\\n') : '없음';
   // 이벤트(한글)
   document.getElementById('events').textContent =
     (STATE.events||[]).slice(-14).reverse().map(e=>`t${e.tick}  ${EVKO[e.type]||e.type}${e.robot?' '+e.robot:''}${e.task?' '+e.task:''}`).join('\\n');
@@ -264,13 +274,16 @@ function draw(R){
    g.moveTo(X-d,Y-d); g.lineTo(X+d,Y+d); g.moveTo(X+d,Y-d); g.lineTo(X-d,Y+d); g.stroke(); }
  }
 }
-function drawSpark(){                                    // 처리량(초록)·백로그(노랑) 시계열
- const c=document.getElementById('spark'), g=c.getContext('2d'), W=c.width, H=c.height;
+function drawSpark(){                                    // 처리량(초록)·백로그(노랑) 시계열 — 면적 채움
+ const c=document.getElementById('spark'), g=c.getContext('2d'), W=c.width, H=c.height, P=5;
  g.clearRect(0,0,W,H); if(SPARK.length<2) return;
  const th=SPARK.map(s=>s[0]), bl=SPARK.map(s=>s[1]), mxT=Math.max(...th,0.01), mxB=Math.max(...bl,1);
- const line=(arr,mx,col)=>{ g.strokeStyle=col; g.lineWidth=1.5; g.beginPath();
-  arr.forEach((v,i)=>{ const x=i/(arr.length-1)*W, y=H-3-(v/mx)*(H-6); i?g.lineTo(x,y):g.moveTo(x,y); }); g.stroke(); };
- line(th,mxT,'#3fb950'); line(bl,mxB,'#e3b341');
+ const draw=(arr,mx,col,fill)=>{ const pts=arr.map((v,i)=>[i/(arr.length-1)*W, H-P-(v/mx)*(H-2*P)]);
+  g.beginPath(); pts.forEach(([x,y],i)=> i?g.lineTo(x,y):g.moveTo(x,y));
+  g.strokeStyle=col; g.lineWidth=2; g.stroke();
+  g.lineTo(W,H); g.lineTo(0,H); g.closePath(); g.fillStyle=fill; g.fill(); };
+ draw(bl,mxB,'#e3b341','rgba(227,179,65,.10)');       // 백로그
+ draw(th,mxT,'#3fb950','rgba(63,185,80,.15)');        // 처리량
 }
 document.getElementById('viz').addEventListener('click', ev=>{   // 로봇 클릭 → 드릴다운 선택
  if(!MAP) return; const c=ev.currentTarget, rect=c.getBoundingClientRect();

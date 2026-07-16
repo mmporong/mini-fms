@@ -34,7 +34,9 @@ SPAWN = C.package_spawner(PICKUPS, DROPOFFS, every=2, per=1)  # 끝없는 물류
 _BR = __import__("random").Random(7)
 BURST = {1: [C.Task(f"B{i}", _BR.choice(PICKUPS), _BR.choice(DROPOFFS)) for i in range(N + 8)]}  # 초기 일괄투입=전 로봇 즉시 가동
 _CX = W.width // 2
-AISLE = [(_CX, y) for y in range(W.height) if W.is_free((_CX, y))]
+# 통로 세그먼트만 폐쇄(양끝 마진 개방) — 열 전체를 닫으면 맵이 분단돼 건너편 로봇이 못 움직임.
+# 세그먼트면 연결 유지 → 로봇이 폐쇄 앞까지 와서 우회(사용자 지적 반영).
+AISLE = [(_CX, y) for y in range(3, W.height - 3) if W.is_free((_CX, y))]
 FAULTS = {t: f"r{(t // 90) % N}" for t in range(90, 10 ** 7, 90)}          # 90tick마다 한 대 고장(→회복)
 OBST = {}
 for _c in range(0, 10 ** 7, 300):                                          # 중앙 통로 주기적 폐쇄→개방
