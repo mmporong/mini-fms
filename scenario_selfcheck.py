@@ -430,6 +430,46 @@ def scenario_temp_closure_recovery():
         C.STUCK_TICKS = old
 
 
+def scenario_sla_zones():
+    """SLA/구역 지표(관측 전용) 인과 검증 — ①폐쇄 주입군 p95 배송소요 > 무폐쇄 대조군(원인=혼잡)
+    ②특정 구역(quadrant) 집중 스폰 시 그 구역 완료 수가 최대(부하가 원인에서 파생)
+    + 되먹임 가드(지표 수집이 tasks 상태 무변형). 자명통과 아님: 지표가 주입 원인을 추적하는지 비교."""
+    w, dep = M.warehouse()
+    st = M.spread(w, 40)
+    hm = {f"r{i}": st[i] for i in range(40)}
+    pk, dp = M.stations(w)
+    cx = w.width // 2
+    ai = [(cx, y) for y in range(w.height) if w.is_free((cx, y))]
+
+    def run(obst, spawn):
+        rb = tuple(sim.Robot(id=f"r{i}", pos=st[i], goal=st[i], priority=i) for i in range(40))
+        born, life, zone_done = {}, [], [0, 0, 0, 0]
+        quad = lambda x, y: (0 if x < w.width // 2 else 1) + (0 if y < w.height // 2 else 2)
+
+        def cb(t, tl, wo, ts, lg):
+            snap = [(x.id, x.stage) for x in ts]                     # 되먹임 가드 스냅샷
+            for x in ts:
+                born.setdefault(x.id, t)
+                if x.stage == "done":
+                    life.append(t - born[x.id])
+                    zone_done[quad(x.dropoff[0], x.dropoff[1])] += 1
+            assert snap == [(x.id, x.stage) for x in ts], "지표 수집이 tasks를 변형(되먹임)"
+        C.run_dynamic(sim.World(wmap=w, robots=rb), spawn=spawn, homes=hm,
+                      obstacle_events=obst, max_ticks=400, on_tick=cb)
+        life.sort()
+        return (life[int(len(life) * 0.95)] if life else 0), zone_done
+
+    base_spawn = lambda: C.package_spawner(pk, dp, every=3, per=1)
+    p95_base, _ = run({}, base_spawn())                               # 무폐쇄 대조군
+    p95_closed, _ = run({80: ("close", ai), 200: ("open", ai)}, base_spawn())   # 폐쇄 주입군
+    assert p95_closed > p95_base, ("폐쇄 주입에도 p95 미상승(지표가 원인 추적 실패)", p95_base, p95_closed)
+    q3 = [c for c in pk if c[0] >= w.width // 2] or pk                # 우측 픽업만
+    d3 = [c for c in dp if c[1] >= w.height // 2] or dp               # 우하 dock만 → quadrant 3 집중
+    _, zd = run({}, C.package_spawner(q3, d3, every=3, per=1))
+    assert zd[3] == max(zd) and zd[3] > 0, ("집중 스폰 구역이 완료 최대 아님", zd)
+    print(f"  [SLA·구역] 폐쇄 주입 p95 {p95_base}→{p95_closed}(상승=원인 추적) · 우하 집중 스폰 구역완료 {zd} · 되먹임 0")
+
+
 def scenario_nav_trace():
     """자동주행 결정 트레이스(ASPIRE식) — sim.step의 주행 결정(재경로·양보·교착)을 버리지 않고 구조화 기록.
     원인주입(통로 폐쇄→혼잡)→파생(nav_reroute 등)→구조화 레코드 assert + 무혼잡 대조군 비교(혼잡이 원인임 실증)."""
@@ -468,6 +508,7 @@ def demo():
     scenario_hysteresis()    # 방향 hysteresis(smooth_locks)
     scenario_blocked_queue() # 차단(개입) 큐(오탐0·되먹임 가드)
     scenario_temp_closure_recovery()  # 차단 오탐 방지(시간 캡: 임시폐쇄 회복·영구폐쇄 정직 차단)
+    scenario_sla_zones()     # SLA/구역 지표(인과 2종·되먹임 가드)
     scenario_nav_trace()     # 자동주행 결정 트레이스(ASPIRE식·원인→파생)
     scenario_crossing()      # (a) 정상 완주
     scenario_deadlock()      # (d) 교착→해소

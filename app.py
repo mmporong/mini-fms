@@ -47,7 +47,8 @@ def get_map():
 
 
 # run.py가 매 tick 갱신: 로봇 스냅샷·동적 폐쇄·통로 방향·집계 지표·최근 이벤트
-STATE = {"robots": [], "dyn_blocked": [], "oneway": [], "blocked_queue": [], "nav_trace": [], "metrics": {}, "events": []}
+STATE = {"robots": [], "dyn_blocked": [], "oneway": [], "blocked_queue": [], "nav_trace": [],
+         "sla": {}, "zones": [], "metrics": {}, "events": []}
 
 
 SPEED = 1.0   # 실행 속도 배율(기본 1배) — run.py on_tick이 읽어 sleep 조절
@@ -146,8 +147,10 @@ DASHBOARD_HTML = """<!doctype html>
     <div class="count" id="sparklbl" style="margin-top:4px"></div>
    </div>
    <div>
-    <div class="ttl">⚠ 개입 필요(도달불가)</div>
-    <div class="count" id="blocked" style="white-space:pre-line;color:#f0883e;max-height:220px;overflow:auto"></div>
+    <div class="ttl">🎯 SLA·구역</div>
+    <div class="count" id="sla" style="white-space:pre-line"></div>
+    <div class="ttl" style="margin-top:10px">⚠ 개입 필요(도달불가)</div>
+    <div class="count" id="blocked" style="white-space:pre-line;color:#f0883e;max-height:160px;overflow:auto"></div>
    </div>
    <div>
     <div class="ttl">🧭 자동주행 결정</div>
@@ -207,6 +210,13 @@ async function poll(){
   // 통로 방향잠금 표시
   const ow=STATE.oneway||[];
   document.getElementById('oneway').textContent = ow.length? `↔ 통로 방향잠금(one-way) ${ow.length}곳 활성` : '';
+  // SLA·구역 지표
+  const sla=STATE.sla||{}, zn=STATE.zones||[];
+  const ZQ=['좌상','우상','좌하','우하'];
+  document.getElementById('sla').textContent = (sla.n?
+    `배송 p50 ${sla.p50}t · p95 ${sla.p95}t · SLA(${sla.target}t) 위반율 ${(sla.violation*100).toFixed(1)}% (n=${sla.n})`
+    : 'SLA: 데이터 수집 중') + (zn.length?
+    '\\n'+zn.map(z=>`${ZQ[z.q]} 완료${z.done}`).join(' · ') : '');
   // 차단(개입 필요) 큐 — 도달불가 태스크
   const bq=STATE.blocked_queue||[];
   document.getElementById('blocked').textContent = bq.length?
