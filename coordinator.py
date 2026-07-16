@@ -22,7 +22,10 @@ BLOCK_CAP_TICKS = 120 + STUCK_TICKS   # = 150
 #   견인 회복 시 현장 배터리 교체 가정으로 응급 잔량 부여 → LOW라 자연히 충전소행
 BATT_LOW = 25
 BATT_CRIT = 10
-BATT_EMERGENCY = 20   # 방전 견인 회복 시 응급 교체 잔량
+BATT_EMERGENCY = 20   # (tow 미사용 시) 방전 제자리 회복 응급 잔량
+# battery["tow"]={"id":..,"home":cell} 지정 시 진짜 견인 로봇 모드:
+#   주둔(home, 충전지역 좌하단) → 방전 발생 시 출동(dispatch) → 인접 도달 시 탑재(haul, 월드에서 들어올림
+#   = 충돌0 불변과 무충돌) → 빈 충전소에 내려놓음(0%부터 충전 시작) → 주둔지 복귀. 제자리 회복은 비활성.
 
 
 @dataclass
@@ -183,6 +186,11 @@ def run_dynamic(world, tasks=None, task_stream=None, obstacle_events=None,
         chargers = list(battery["chargers"])
         drain_every = battery.get("drain_every", 42)   # 1×속도(~8.3tick/s) 기준 5초 ≈ 42tick당 1%
         charge_per = battery.get("charge_per", 1.25)   # 완충 10초 ≈ 83tick에 0→100 = 1.2%/tick
+        tow = battery.get("tow")                       # 견인 로봇 모드(선택)
+        if tow:
+            tow.setdefault("state", "idle")            # idle/dispatch/haul/return
+            tow.setdefault("hauled", None)             # 탑재된 방전 로봇(Robot 객체)
+            batt[tow["id"]] = 100                      # 견인 로봇은 배터리 회계 제외(항상 100)
     noclaim, log = {}, []
     down_since, best_dist, goal_at, stuck, reassigns = {}, {}, {}, {}, {}   # 회복·정체 재배분·차단 추적
     unreach_since = {}   # (task_id, stage) → 연속 도달불가 시작 tick(시간 캡 터미널 판정용, 도달 가능 관측 시 리셋)
@@ -211,8 +219,8 @@ def run_dynamic(world, tasks=None, task_stream=None, obstacle_events=None,
         if battery:
             robs0 = {r.id: r for r in world.robots}
             for r in world.robots:
-                if not r.alive or r.status == "down":
-                    continue
+                if not r.alive or r.status == "down" or (tow and r.id == tow["id"]):
+                    continue                             # 견인 로봇은 배터리 회계·임무 대상 아님
                 if charging.get(r.id) == r.pos:          # 충전소 도착 → 충전(완충 10초 상당)
                     batt[r.id] = min(100.0, batt[r.id] + charge_per)
                     if batt[r.id] >= 100:
@@ -227,7 +235,8 @@ def run_dynamic(world, tasks=None, task_stream=None, obstacle_events=None,
                     batt[r.id] = 0
                     robs0[r.id] = _replace(r, alive=False, status="down", task=None, path=())
                     charging.pop(r.id, None)
-                    down_since[r.id] = tick              # 기존 towed 회복(RECOVER_TICKS) 재사용
+                    if not tow:
+                        down_since[r.id] = tick          # tow 미사용 시에만 제자리 회복(RECOVER_TICKS)
                     for t in tasks:
                         if t.robot == r.id and t.stage != "done":
                             t.stage, t.robot = "open", None   # 들고 있던 임무 재개방(재배분)
@@ -239,8 +248,9 @@ def run_dynamic(world, tasks=None, task_stream=None, obstacle_events=None,
                     robs0[r.id] = _replace(r, task=None, status="idle", goal=r.pos, stuck_ticks=0)
                     log.append({"tick": tick, "type": "battery_return", "robot": r.id})
             world = _replace(world, robots=tuple(robs0[r.id] for r in world.robots))
-            exclude = frozenset(rid for rid in batt      # LOW 이하·충전 중 = 새 임무 할당 제외
-                                if batt[rid] <= BATT_LOW or rid in charging)
+            exclude = frozenset(rid for rid in batt      # LOW 이하·충전 중·견인 로봇 = 새 임무 할당 제외
+                                if batt[rid] <= BATT_LOW or rid in charging
+                                or (tow and rid == tow["id"]))
 
         world = assign(world, tasks, exclude)            # 온라인 재할당(긴급 우선, 저배터리 제외)
         world, telem, stepev = sim.step(world)           # 이동(폐쇄·고장 우회 자동)
@@ -324,13 +334,67 @@ def run_dynamic(world, tasks=None, task_stream=None, obstacle_events=None,
                     log.append({"tick": tick, "type": "charge_go", "robot": r.id})
             world = _replace(world, robots=tuple(dispatch[r.id] for r in world.robots))
 
+        if battery and tow:                              # ⑤ 견인 로봇 상태기계(주둔→출동→탑재→하역→복귀)
+            robs_t = {r.id: r for r in world.robots}
+            tw = robs_t.get(tow["id"])
+            if tw is not None:
+                blk = sim.blocked_all(world)
+                occupied_ch = set(charging.values())
+                if tow["state"] == "idle":
+                    dead = sorted([r for r in world.robots
+                                   if r.status == "down" and batt.get(r.id, 100) <= 0], key=lambda r: r.id)
+                    if dead:
+                        tow["target"] = dead[0].id       # 출동(방전 셀은 막혀 있으니 인접 자유 셀로)
+                        adj = [n for n in sorted(world.wmap.neighbors(dead[0].pos)) if n not in blk]
+                        if adj:
+                            tow["state"] = "dispatch"
+                            robs_t[tw.id] = sim.plan_robot(world.wmap, _replace(tw, goal=adj[0]), blk)
+                            log.append({"tick": tick, "type": "tow_dispatch", "robot": tow["target"]})
+                elif tow["state"] == "dispatch":
+                    victim = robs_t.get(tow.get("target"))
+                    if victim is None or batt.get(tow.get("target"), 100) > 0:
+                        tow["state"], tow["target"] = "return", None   # 대상 소실 → 복귀
+                    elif abs(tw.pos[0] - victim.pos[0]) + abs(tw.pos[1] - victim.pos[1]) <= 1:
+                        tow["hauled"] = victim           # 탑재: 방전 로봇을 월드에서 들어올림(충돌0 무충돌)
+                        world = _replace(world, robots=tuple(r for r in world.robots if r.id != victim.id))
+                        robs_t = {r.id: r for r in world.robots}
+                        tw = robs_t[tow["id"]]
+                        free_ch = [c for c in chargers if c not in occupied_ch and c not in blk]
+                        target_ch = min(free_ch, key=lambda c: _man(tw.pos, c)) if free_ch else tow["home"]
+                        tow["drop"] = target_ch
+                        charging[victim.id] = target_ch  # 충전소 선예약(다른 로봇 파견 차단)
+                        tow["state"] = "haul"
+                        robs_t[tw.id] = sim.plan_robot(world.wmap, _replace(tw, goal=target_ch), blk)
+                        log.append({"tick": tick, "type": "tow_haul", "robot": victim.id})
+                elif tow["state"] == "haul":
+                    if tw.pos == tow.get("drop"):        # 충전소 도착 → 복귀 시작(하역은 셀을 비운 다음 tick, return 분기)
+                        tow["state"] = "return"
+                        robs_t[tw.id] = sim.plan_robot(world.wmap, _replace(tw, goal=tow["home"]), blk)
+                elif tow["state"] == "return":
+                    if tow.get("hauled") is not None and tw.pos != tow.get("drop"):
+                        v = tow["hauled"]                # 하역: tow가 충전소 셀을 비우면 방전 로봇을 그 자리에 배치
+                        drop = tow["drop"]
+                        if all(r.pos != drop for r in world.robots):
+                            placed = _replace(v, pos=drop, goal=drop, path=(), status="idle",
+                                              alive=True, task=None, stuck_ticks=0)
+                            world = _replace(world, robots=world.robots + (placed,))
+                            robs_t = {r.id: r for r in world.robots}
+                            tw = robs_t[tow["id"]]
+                            tow["hauled"] = None         # 0%부터 충전 시작(charging 예약 유지)
+                            log.append({"tick": tick, "type": "tow_drop", "robot": v.id})
+                    if tw.pos == tow["home"] and tow.get("hauled") is None:
+                        tow["state"], tow["target"], tow["drop"] = "idle", None, None
+                        log.append({"tick": tick, "type": "tow_done"})
+                world = _replace(world, robots=tuple(robs_t[r.id] for r in world.robots if r.id in robs_t))
+
         if homes:                                        # ③ 유휴 로봇 staging 복귀(분산) — 충전行 로봇 제외
             blk = sim.blocked_all(world)
             parked = {r.id: r for r in world.robots}
             for r in world.robots:
                 h = homes.get(r.id)
                 if (r.task is None and r.alive and r.status != "down" and h and r.pos != h and r.goal != h
-                        and not (battery and r.id in battery.get("charging", {}))):
+                        and not (battery and r.id in battery.get("charging", {}))
+                        and not (battery and tow and r.id == tow["id"])):
                     parked[r.id] = sim.plan_robot(world.wmap, _replace(r, goal=h), blk)
             world = _replace(world, robots=tuple(parked[r.id] for r in world.robots))
 

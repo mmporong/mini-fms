@@ -137,6 +137,7 @@ DASHBOARD_HTML = """<!doctype html>
    <span><i class="sw" style="background:#f0d060"></i>적재(금색 링)</span>
    <span><i class="sw" style="background:#1f6feb"></i>픽업 rack</span><span><i class="sw" style="background:#8a6d1f"></i>배송 dock<span style="color:#ffd766">(숫자=오는 로봇)</span></span>
    <span><i class="sw" style="background:#2da44e"></i>⚡충전소(좌측 열)·하단 바=배터리</span>
+   <span><i class="sw" style="background:#9e6a03"></i>🚚견인 로봇(네모·좌하단 주둔)</span>
    <span style="color:#8b949e">상태(이동/대기/…)는 위 막대·요약 참고</span>
   </div>
   <div class="logs">
@@ -171,7 +172,8 @@ const COLOR = {moving:"#3fb950", waiting:"#e3b341", arrived:"#58a6ff", down:"#f8
 const EVKO = {task_spawn:"임무 발생", fault_derived:"고장 파생", recovered:"로봇 회복",
   aisle_close:"통로 폐쇄", aisle_open:"통로 개방", task_reassign:"임무 재배분", task_blocked:"임무 차단(개입)",
   reroute:"혼잡 재경로", yield_idle:"유휴 양보", deadlock:"교착 해소", oneway:"통로 방향잠금",
-  charge_go:"충전소行", charged:"완충 복귀", battery_return:"배터리 임무반납", battery_dead:"🔋 방전 정지(에러)", task_churn:"임무 재시도 지속"};
+  charge_go:"충전소行", charged:"완충 복귀", battery_return:"배터리 임무반납", battery_dead:"🔋 방전 정지(에러)", task_churn:"임무 재시도 지속",
+  tow_dispatch:"🚚 견인 출동", tow_haul:"🚚 탑재·운반", tow_drop:"🚚 충전소 하역", tow_done:"🚚 견인 복귀"};
 let MAP=null, STATE={robots:[],dyn_blocked:[],oneway:[],blocked_queue:[],nav_trace:[],metrics:{},events:[]};
 let SPARK=[], SEL=null, LABELMODE=0;   // 시계열 · 선택 로봇 · 라벨(0=번호 1=번호+우선순위 2=끄기)
 
@@ -305,8 +307,18 @@ function draw(R, cur){
    g.moveTo(cx2+dx*a,cy2+dy*a); g.lineTo(cx2+dx*a-(dx+dy)*a*0.5,cy2+dy*a-(dy-dx)*a*0.5);                // 촉1
    g.moveTo(cx2+dx*a,cy2+dy*a); g.lineTo(cx2+dx*a-(dx-dy)*a*0.5,cy2+dy*a-(dy+dx)*a*0.5); g.stroke(); }  // 촉2
  }
+ if(MAP.tow_home){ const [hx,hy]=MAP.tow_home;                                                         // 견인 주둔지(좌하단)
+  g.strokeStyle='#f0883e'; g.lineWidth=1; g.strokeRect(hx*cs+1,hy*cs+1,cs-3,cs-3); }
  for(const r of R){                                                                                    // 로봇 dot(색=우선순위) + 라벨
   const p=(cur&&cur[r.id])||r, X=px(p.x), Y=py(p.y), rad=Math.max(2,cs*0.46);
+  if(r.tow){                                                                                            // 견인 로봇 = 네모(주황)
+   const s=rad*1.05;
+   g.fillStyle = r.hauling ? '#f0883e' : '#9e6a03';
+   g.fillRect(X-s,Y-s,s*2,s*2); g.strokeStyle='#0b0e13'; g.lineWidth=1; g.strokeRect(X-s,Y-s,s*2,s*2);
+   if(cs>=11){ g.fillStyle='#0b0e13'; g.font=`bold ${Math.floor(cs*0.5)}px sans-serif`;
+    g.textAlign='center'; g.textBaseline='middle'; g.fillText(r.hauling?'🔋':'T', X, Y); }
+   continue;                                                                                            // 일반 dot 렌더 스킵
+  }
   let col;
   if(r.status==='down') col='#484f58';                                                                 // 고장=회색
   else if(r.task==null) col='#6e7681';                                                                 // 유휴(임무 없음)=회색

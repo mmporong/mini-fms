@@ -494,25 +494,30 @@ def scenario_sla_zones():
 
 
 def scenario_battery():
-    """배터리(opt-in) — ①LOW 로봇이 충전소行→완충→복귀(할당 재개) ②방전=에러 송신(battery_dead)
-    +정지(down·정적 장애물)→견인(RECOVER)→응급 배터리→재충전 ③battery 미지정 경로는 기존과 동일(골든 보호).
-    원인주입(초기 잔량·drain)→시스템 파생(충전行·방전·회복)→결과 assert. 우선순위는 할당 계층만(이동 부스트 금지 준수)."""
+    """배터리+견인 로봇(opt-in) — ①LOW 로봇 충전소行→완충→복귀 ②방전=에러 송신(battery_dead)+정지(down)
+    ③견인 로봇이 출동→탑재(월드에서 들어올림=충돌0 무충돌)→충전소 하역→0%부터 충전→완충, tow 주둔 복귀
+    ④battery 미지정 경로는 기존과 동일(골든 보호). 원인주입(잔량·drain)→시스템 파생→결과 assert."""
     w = M.from_ascii(["........"] * 8)
-    chargers = [(0, 0)]
-    rb = (sim.Robot("r0", (7, 7), (7, 7)), sim.Robot("r1", (0, 1), (0, 1)))
-    B = {"chargers": chargers, "init": {"r0": 2, "r1": 90}, "drain_every": 1, "charge_per": 5}
-    spawn = C.package_spawner([(6, 6)], [(1, 1)], every=50, per=1)
-    _, _, log, _ = C.run_dynamic(sim.World(wmap=w, robots=rb), spawn=spawn, battery=B, max_ticks=150)
+    chargers = [(0, y) for y in range(0, 6)]
+    home = (0, 7)                                          # 충전지역 맨 왼쪽 하단 주둔지
+    rb = (sim.Robot("r0", (7, 7), (7, 7)), sim.Robot("r1", (3, 1), (3, 1)), sim.Robot("tow", home, home))
+    B = {"chargers": chargers, "init": {"r0": 2, "r1": 90}, "drain_every": 1, "charge_per": 5,
+         "tow": {"id": "tow", "home": home}}
+    spawn = C.package_spawner([(6, 6)], [(1, 1)], every=60, per=1)
+    seen_r0 = []
+    _, _, log, _ = C.run_dynamic(sim.World(wmap=w, robots=rb), spawn=spawn, battery=B, max_ticks=200,
+                                 on_tick=lambda t, tl, wo, ts, lg:
+                                 seen_r0.append(any(x["robot_id"] == "r0" for x in tl)))
     ev = lambda t: [e for e in log if e["type"] == t]
     assert ev("battery_dead"), "방전 이벤트(에러 송신) 미발생"
-    assert ev("recovered"), "방전 후 견인 회복 미작동(영구 정지)"
-    assert ev("charged"), "완충 미도달(충전 사이클 미작동)"
-    t_dead = ev("battery_dead")[0]["tick"]
-    t_rec = ev("recovered")[0]["tick"]
-    assert t_rec - t_dead >= C.RECOVER_TICKS, "정지 구간 없이 즉시 회복(멈춤 미표현)"
-    assert ev("charge_go") and ev("charge_go")[0]["tick"] <= t_dead, "저배터리 충전行 파견 미작동"
-    assert 0 < B["levels"]["r1"] <= 100 and B["levels"]["r0"] > C.BATT_EMERGENCY, "잔량 회계 이상"
-    print(f"  [배터리] 방전 t{t_dead}(에러)→down 정지→견인 t{t_rec}→응급{C.BATT_EMERGENCY}%→완충 t{ev('charged')[0]['tick']} · 충전行 {len(ev('charge_go'))}회")
+    assert ev("tow_dispatch") and ev("tow_haul") and ev("tow_drop") and ev("tow_done"), "견인 사이클 미완"
+    assert not all(seen_r0), "탑재 구간(월드에서 들어올림) 미관측"
+    order = [ev(t)[0]["tick"] for t in ("battery_dead", "tow_dispatch", "tow_haul", "tow_drop")]
+    assert order == sorted(order), ("견인 순서 이상", order)
+    assert ev("charged"), "하역 후 충전 미완(0%→100 사이클)"
+    assert ev("charge_go") and 0 < B["levels"]["r1"] <= 100, "일반 충전行/잔량 회계 이상"
+    print(f"  [배터리·견인] 방전 t{order[0]}(에러)→tow 출동 t{order[1]}→탑재 t{order[2]}(운반 {sum(1 for s in seen_r0 if not s)}t)"
+          f"→하역 t{order[3]}→완충 t{ev('charged')[0]['tick']} · tow 주둔 복귀")
 
 
 def scenario_nav_trace():

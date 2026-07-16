@@ -27,10 +27,13 @@ BASE = f"http://{HOST}:{PORT}"
 
 W, DEPOTS = M.warehouse(varied=True)                        # 38x27 · 변화형(블록 크기·방향·빈공간 다양화, 시각용)
 N = 40
-CHARGERS = [c for c in DEPOTS if c[0] == 0]                 # 좌측 열(x=0) 한 줄 = 배터리 충전소(통로 밖이라 길 안 막음)
+_LEFT_COL = sorted(c for c in DEPOTS if c[0] == 0)          # 좌측 열(x=0) — 통로 밖이라 길 안 막음
+TOW_HOME = _LEFT_COL[-1]                                    # 충전지역 맨 왼쪽 하단 = 견인 로봇 주둔지
+CHARGERS = _LEFT_COL[:-1]                                   # 나머지 = 배터리 충전소 한 줄
 BATTERY = {"chargers": CHARGERS, "seed": 7,                 # 랜덤 초기 잔량(15~100%, 시드 결정론)
            "drain_every": 42,                               # 1×속도(~8.3tick/s) 기준 5초당 1% 방전
-           "charge_per": 1.25}                              # 완충 10초 ≈ 83tick(0→100)
+           "charge_per": 1.25,                              # 완충 10초 ≈ 83tick(0→100)
+           "tow": {"id": "tow", "home": TOW_HOME}}          # 진짜 견인 로봇(네모): 방전 로봇 탑재→충전소 하역
 STARTS = M.spread(W, N, reserved=frozenset(CHARGERS))       # 분산 초기 배치(충전소와 안 겹치게)
 HOMES = {f"r{i}": STARTS[i] for i in range(N)}              # 유휴 시 각자 staging 복귀 → 분산
 PICKUPS, DROPOFFS = M.stations(W)                           # 물류 지점(rack 픽업·dock 배송)
@@ -76,7 +79,8 @@ for _k in range(0, 200000, 200):                                          # 200t
 
 
 def robots():
-    return tuple(sim.Robot(id=f"r{i}", pos=STARTS[i], goal=STARTS[i], priority=i) for i in range(N))
+    return tuple(sim.Robot(id=f"r{i}", pos=STARTS[i], goal=STARTS[i], priority=i) for i in range(N)) \
+        + (sim.Robot(id="tow", pos=TOW_HOME, goal=TOW_HOME, priority=N),)   # 견인 로봇(주둔지 대기)
 
 
 _LOCK_HIST = {}    # run키(정렬 셀 튜플) → 최근 방향들 — hysteresis용
@@ -143,6 +147,8 @@ def on_tick(tick, telem, world, tasks, log):
                       if r.task and stage.get(r.task) == "todropoff" else None),
              "batt": round(BATTERY["levels"].get(r.id, 100)),                 # 배터리 잔량(%)
              "charging": r.id in BATTERY.get("charging", {}),                 # 충전行/충전 중
+             "tow": r.id == "tow",                                            # 견인 로봇(네모 렌더)
+             "hauling": (r.id == "tow" and BATTERY["tow"].get("hauled") is not None),
              "wait_reason": wr.get(r.id, "none")}
             for r in world.robots]
     if tick % 2 == 0:                                       # DB 발행(드릴다운·파이프라인) — 배치 1커밋(2tick마다)
@@ -194,7 +200,7 @@ if __name__ == "__main__":
     app_module.MAP = {"width": W.width, "height": W.height,
                       "obstacles": [list(c) for c in W.obstacles],
                       "pickups": [list(c) for c in PICKUPS], "dropoffs": [list(c) for c in DROPOFFS],
-                      "chargers": [list(c) for c in CHARGERS]}
+                      "chargers": [list(c) for c in CHARGERS], "tow_home": list(TOW_HOME)}
     threading.Thread(target=uvicorn.Server(
         uvicorn.Config(app_module.app, host=HOST, port=PORT, log_level="error")).run, daemon=True).start()
     time.sleep(1.5)
