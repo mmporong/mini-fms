@@ -63,6 +63,7 @@ def _closures(w):                                                          # 다
 
 _CX = W.width // 2
 _CANDS = _closures(W)                                                      # 연결성 유지되는 다양한 폐쇄들
+__import__("random").Random(11).shuffle(_CANDS)                            # 시드 셔플 — 좌측(x=5부터 순차) 편중 방지, 위치·방향 골고루 순환
 FAULTS = {t: f"r{(t // 90) % N}" for t in range(90, 10 ** 7, 90)}          # 90tick마다 한 대 고장(→회복)
 OBST = {}
 for _k in range(0, 200000, 200):                                          # 200tick 주기로 다른 위치·방향 폐쇄 순환
@@ -111,6 +112,7 @@ def smoothed_oneway(world):
 
 def on_tick(tick, telem, world, tasks, log):
     stage = {t.id: t.stage for t in tasks}
+    dropoff_of = {t.id: t.dropoff for t in tasks}                            # dock 대기 넘버링용(read-only)
     wr = {t["robot_id"]: t["metrics"].get("wait_reason", "none") for t in telem}
     for r in world.robots:                                                   # 레그 경과시간 추적(픽업하러/배송중 각각 리셋)
         if r.task is None:
@@ -133,6 +135,8 @@ def on_tick(tick, telem, world, tasks, log):
              "stuck": r.stuck_ticks,
              "age": tick - _TASK_START[r.id][1] if r.id in _TASK_START else 0,  # 배송 경과(색=지연, 반납 시 0)
              "carrying": bool(r.task and stage.get(r.task) == "todropoff"),   # 적재 중(하역지로 운반)
+             "dest": (list(dropoff_of[r.task])                                # 배송 목적 dock(대기 넘버링용)
+                      if r.task and stage.get(r.task) == "todropoff" else None),
              "wait_reason": wr.get(r.id, "none")}
             for r in world.robots]
     if tick % 2 == 0:                                       # DB 발행(드릴다운·파이프라인) — 배치 1커밋(2tick마다)

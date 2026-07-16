@@ -135,7 +135,7 @@ DASHBOARD_HTML = """<!doctype html>
    <span><i class="sw" style="background:#6e7681"></i>유휴</span>
    <span><i class="sw" style="background:#484f58"></i>고장(X)</span>
    <span><i class="sw" style="background:#f0d060"></i>적재(금색 링)</span>
-   <span><i class="sw" style="background:#1f6feb"></i>픽업 rack</span><span><i class="sw" style="background:#8a6d1f"></i>배송 dock</span>
+   <span><i class="sw" style="background:#1f6feb"></i>픽업 rack</span><span><i class="sw" style="background:#8a6d1f"></i>배송 dock<span style="color:#ffd766">(숫자=오는 로봇)</span></span>
    <span style="color:#8b949e">상태(이동/대기/…)는 위 막대·요약 참고</span>
   </div>
   <div class="logs">
@@ -278,6 +278,14 @@ function draw(R, cur){
  g.fillStyle='#30363d'; for(const [x,y] of MAP.obstacles) g.fillRect(x*cs,y*cs,cs-1,cs-1);           // 선반
  g.fillStyle='#1f6feb'; for(const [x,y] of (MAP.pickups||[])) g.fillRect(x*cs+cs*0.12,y*cs+cs*0.12,cs*0.76,cs*0.76); // 픽업 rack
  g.fillStyle='#8a6d1f'; for(const [x,y] of (MAP.dropoffs||[])) g.fillRect(x*cs,y*cs,cs-1,cs-1);       // 배송 dock
+ const dockWait={};                                                                                    // dock별 대기(배송 오는) 로봇 번호
+ for(const r of R){ if(r.carrying&&r.dest){ const k=r.dest[0]+','+r.dest[1];
+  (dockWait[k]=dockWait[k]||[]).push(r.id.replace(/\\D/g,'')); } }
+ for(const k in dockWait){ const [x,y]=k.split(',').map(Number), ids=dockWait[k];
+  const lbl=ids.slice(0,2).join(',')+(ids.length>2?'+':'');
+  g.fillStyle='#ffd766'; g.textAlign='center'; g.textBaseline='middle';
+  g.font=`bold ${Math.max(8,Math.floor(cs*(ids.length>1?0.36:0.5)))}px ui-monospace,monospace`;
+  g.fillText(lbl, px(x), py(y)); }
  g.fillStyle='rgba(248,81,73,.5)'; for(const [x,y] of (STATE.dyn_blocked||[])) g.fillRect(x*cs,y*cs,cs-1,cs-1);  // 동적 폐쇄
  for(const lk of (STATE.oneway||[])){                                                                  // 통로 방향(one-way) 화살표
   const [dx,dy]=lk.dir; for(const [x,y] of lk.cells){ const cx2=px(x),cy2=py(y),a=cs*0.32;
