@@ -25,7 +25,7 @@ import store   # 직접 삽입(HTTP 왕복 제거 → 속도 배율 실효)
 HOST, PORT = "127.0.0.1", 8820
 BASE = f"http://{HOST}:{PORT}"
 
-W, DEPOTS = M.warehouse()                                   # 38x27 ≈1000셀, 소형 대비 10배
+W, DEPOTS = M.warehouse(varied=True)                        # 38x27 · 변화형(블록 크기·방향·빈공간 다양화, 시각용)
 N = 40
 STARTS = M.spread(W, N)                                     # 분산 초기 배치(시작부터 안 뭉침)
 HOMES = {f"r{i}": STARTS[i] for i in range(N)}              # 유휴 시 각자 staging 복귀 → 분산
@@ -50,6 +50,7 @@ def robots():
 _LOCK_HIST = {}    # run키(정렬 셀 튜플) → 최근 방향들 — hysteresis용
 _BLOCKED_SEEN = {}  # 차단(개입 필요) 태스크 누적 — 연속 모드는 blocked를 pruning하므로 등장 시 보존
 _NAV_TRACE = deque(maxlen=400)   # 자동주행 결정 트레이스 큐(ASPIRE식 flight recorder) — 재경로·양보·교착해소
+_TASK_START = {}                 # robot_id → (task_id, 시작 tick) — 배송 경과시간(색=지연) 계산, 반납 시 리셋
 
 # 핫루프 DB 발행 전용 영속 커넥션(store.insert는 건당 커넥션+commit → 병목). store.py 무변경, 같은 파일에 WAL로 배치 기록.
 _DB = sqlite3.connect(str(store.DB_PATH), check_same_thread=False)
@@ -74,10 +75,16 @@ def smoothed_oneway(world):
 def on_tick(tick, telem, world, tasks, log):
     stage = {t.id: t.stage for t in tasks}
     wr = {t["robot_id"]: t["metrics"].get("wait_reason", "none") for t in telem}
+    for r in world.robots:                                                   # 배송 경과시간 추적(반납 시 리셋)
+        if r.task is None:
+            _TASK_START.pop(r.id, None)
+        elif _TASK_START.get(r.id, (None,))[0] != r.task:
+            _TASK_START[r.id] = (r.task, tick)                               # 새 임무 배정 → 시작 tick 기록
     snap = [{"id": r.id, "x": r.pos[0], "y": r.pos[1], "status": r.status, "task": r.task,
              "pr": r.priority,                                                # 기본 이동 우선순위(번호와 함께 표시)
              "eff": r.priority - sim.AGING * r.stuck_ticks,                   # 유효 우선순위(대기 누적=aging 반영)
              "stuck": r.stuck_ticks,
+             "age": tick - _TASK_START[r.id][1] if r.id in _TASK_START else 0,  # 배송 경과(색=지연, 반납 시 0)
              "carrying": bool(r.task and stage.get(r.task) == "todropoff"),   # 적재 중(하역지로 운반)
              "wait_reason": wr.get(r.id, "none")}
             for r in world.robots]

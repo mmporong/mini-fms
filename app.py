@@ -127,10 +127,11 @@ DASHBOARD_HTML = """<!doctype html>
   <div class="kpi" id="kpi"></div>
   <div class="bar" id="bar"></div>
   <div class="legend">
-   <span>로봇 색 = 우선순위:</span>
-   <span><i class="sw" style="background:#f85149"></i>높음(선점)</span>
-   <span><i class="sw" style="background:#f7c8c3"></i>중간</span>
-   <span><i class="sw" style="background:#ffffff;border:1px solid #444c56"></i>낮음</span>
+   <span>로봇 색 = 배송 지연:</span>
+   <span><i class="sw" style="background:#ffffff;border:1px solid #444c56"></i>방금</span>
+   <span><i class="sw" style="background:#f7c8c3"></i>지연</span>
+   <span><i class="sw" style="background:#f85149"></i>오래 지연</span>
+   <span><i class="sw" style="background:#6e7681"></i>유휴</span>
    <span><i class="sw" style="background:#484f58"></i>고장(X)</span>
    <span><i class="sw" style="background:#f0d060"></i>적재(금색 링)</span>
    <span><i class="sw" style="background:#1f6feb"></i>픽업 rack</span><span><i class="sw" style="background:#8a6d1f"></i>배송 dock</span>
@@ -217,8 +218,9 @@ async function poll(){
     `<span style="color:#3fb950">▬ 처리량 ${mt.throughput??0}/t</span>&nbsp;&nbsp;<span style="color:#e3b341">▬ 대기물류 ${mt.active??0}</span>`;
   // 로봇 드릴다운(선택 로봇 상세 — 우선순위 포함)
   if(SEL){ const sr=R.find(r=>r.id===SEL);
-    let head = sr? `🔍 ${SEL} · 우선순위 p${sr.pr}(유효 ${sr.eff}, 대기 ${sr.stuck}t) · ${sr.status}`
-                   +`${sr.task?' · 임무 '+sr.task:''}${sr.wait_reason&&sr.wait_reason!=='none'?' · '+sr.wait_reason:''}` : `🔍 ${SEL}`;
+    let head = sr? `🔍 ${SEL} · ${sr.status}${sr.task?' · 임무 '+sr.task+' · 배송경과 '+sr.age+'t':' · 유휴'}`
+                   +` · 우선순위 p${sr.pr}(유효 ${sr.eff}, 대기 ${sr.stuck}t)`
+                   +`${sr.wait_reason&&sr.wait_reason!=='none'?' · '+sr.wait_reason:''}` : `🔍 ${SEL}`;
     try{ const {rows}=await (await fetch('/recent?seconds=30&robot_id='+SEL)).json();
       head += `\\n최근 ${rows.length}: `+rows.slice(-6).map(r=>`(${r.metrics.x},${r.metrics.y})`).join(' '); }catch(e){}
     document.getElementById('drill').textContent = head;
@@ -262,10 +264,7 @@ function draw(R, cur){
  const c=document.getElementById('viz'), g=c.getContext('2d'), W=c.width, H=c.height;
  const cs=Math.max(4,Math.floor(Math.min(W/MAP.width, H/MAP.height)));
  const px=x=>x*cs+cs/2, py=y=>y*cs+cs/2;
- const alive=R.filter(r=>r.status!=='down');                 // 우선순위 색 = 랭크 기반(값 팽창 무관·매 프레임 전체 그라디언트)
- const ord=[...alive].sort((a,b)=>((a.eff??0)-(b.eff??0))||(a.id<b.id?-1:1));   // eff 오름차순(낮을수록 선점)
- const rank={}; ord.forEach((r,i)=>rank[r.id]=ord.length>1?i/(ord.length-1):0);  // 0=선점(빨강) .. 1=최저(흰)
- g.clearRect(0,0,W,H);
+ g.clearRect(0,0,W,H);   // 로봇 색 = 배송 경과(age): 흰=방금·유휴 회색 → 빨강=오래 지연(반납 시 리셋)
  g.fillStyle='#30363d'; for(const [x,y] of MAP.obstacles) g.fillRect(x*cs,y*cs,cs-1,cs-1);           // 선반
  g.fillStyle='#1f6feb'; for(const [x,y] of (MAP.pickups||[])) g.fillRect(x*cs+cs*0.12,y*cs+cs*0.12,cs*0.76,cs*0.76); // 픽업 rack
  g.fillStyle='#8a6d1f'; for(const [x,y] of (MAP.dropoffs||[])) g.fillRect(x*cs,y*cs,cs-1,cs-1);       // 배송 dock
@@ -281,8 +280,9 @@ function draw(R, cur){
   const p=(cur&&cur[r.id])||r, X=px(p.x), Y=py(p.y), rad=Math.max(2,cs*0.46);
   let col;
   if(r.status==='down') col='#484f58';                                                                 // 고장=회색
-  else { const t=rank[r.id]??0;                                                                        // 랭크: 0=선점(빨강) .. 1=최저(흰)
-    col=`rgb(${248+Math.round(t*7)},${81+Math.round(t*174)},${73+Math.round(t*182)})`; }
+  else if(r.task==null) col='#6e7681';                                                                 // 유휴(임무 없음)=회색
+  else { const t=Math.min(1,(r.age||0)/60);                                                            // 0=방금(흰) .. 1=오래지연(빨강)
+    col=`rgb(${255-Math.round(t*7)},${255-Math.round(t*174)},${255-Math.round(t*182)})`; }
   g.fillStyle=col; g.beginPath(); g.arc(X,Y,rad,0,7); g.fill();
   g.strokeStyle='#0b0e13'; g.lineWidth=1; g.stroke();                                                  // 경계선(인접 로봇 구분)
   if(r.carrying){ g.strokeStyle='#f0d060'; g.lineWidth=Math.max(2,cs*0.16); g.beginPath();             // 적재 중 = 굵은 금색 링(잘 보이게)

@@ -45,9 +45,13 @@ def from_ascii(rows):
     return WarehouseMap(w, h, frozenset(obstacles), tuple(pickups), tuple(dropoffs))
 
 
-def warehouse(blocks_x=6, blocks_y=5, block_w=4, block_h=3, aisle=2, margin=2):
-    """블록형 창고 격자 생성(현업 규모) — 선반 블록 배열 + 통로 + 좌측 depot(staging).
-    반환: (WarehouseMap, depots). 기본 ≈38x27(≈1000셀, 소형 대비 10배)."""
+def warehouse(blocks_x=6, blocks_y=5, block_w=4, block_h=3, aisle=2, margin=2, varied=False, seed=42):
+    """블록형 창고 격자 생성(현업 규모) — 선반 블록 배열 + 통로 + 좌측 depot(staging). 기본 ≈38x27.
+    varied=False: 균일 격자(결정론·견고, 테스트/골든용). varied=True: 시드 기반으로 각 슬롯의 블록
+    크기·방향·위치를 다양화하고 일부 슬롯을 빈 공간으로(데모 시각용). 아이슬 격자는 항상 열려 연결성 보장.
+    반환: (WarehouseMap, depots)."""
+    import random
+    rng = random.Random(seed)
     content_x = blocks_x * block_w + (blocks_x - 1) * aisle
     content_y = blocks_y * block_h + (blocks_y - 1) * aisle
     width, height = content_x + 2 * margin, content_y + 2 * margin
@@ -56,9 +60,16 @@ def warehouse(blocks_x=6, blocks_y=5, block_w=4, block_h=3, aisle=2, margin=2):
         ox = margin + bx * (block_w + aisle)
         for by in range(blocks_y):
             oy = margin + by * (block_h + aisle)
-            for dx in range(block_w):
-                for dy in range(block_h):
-                    obstacles.add((ox + dx, oy + dy))
+            if varied and rng.random() < 0.14:                    # 빈 공간(open plaza)
+                continue
+            if varied:                                            # 크기·방향·위치 다양화
+                bw, bh = rng.randint(2, block_w), rng.randint(2, block_h)
+                offx, offy = rng.randint(0, block_w - bw), rng.randint(0, block_h - bh)
+            else:
+                bw, bh, offx, offy = block_w, block_h, 0, 0
+            for dx in range(bw):
+                for dy in range(bh):
+                    obstacles.add((ox + offx + dx, oy + offy + dy))
     wmap = WarehouseMap(width, height, frozenset(obstacles), (), ())
     depots = [(x, y) for x in range(margin) for y in range(height) if (x, y) not in obstacles]
     return wmap, depots

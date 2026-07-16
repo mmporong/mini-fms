@@ -313,10 +313,12 @@ def scenario_gridlock():
     _, tasks, log, m = C.run_dynamic(sim.World(wmap=w3, robots=robots), task_stream=stream,
                                      obstacle_events={15: ("close", list(segs))}, max_ticks=2500)
     blocked = [t for t in tasks if t.stage == "blocked"]
-    true_gridlock = [t for t in blocked if t.pickup not in segs and t.dropoff not in segs]
-    assert not true_gridlock, ("실제 교착 발생(물류지점 열렸는데 차단)", [t.id for t in true_gridlock])
+    import planner as _P
+    reach = lambda a, b: _P.astar(w3, a, b, segs) is not None            # 폐쇄 맵에서 실제 도달 가능?
+    true_gridlock = [t for t in blocked if reach(depots[0], t.pickup) and reach(t.pickup, t.dropoff)]
+    assert not true_gridlock, ("실제 교착 발생(도달 가능한데 차단)", [t.id for t in true_gridlock])
     print(f"  [교착해소] 정지로봇 길막음({ticks}t·yield_idle) + 1-wide 정면충돌 통과({t2}t) + "
-          f"3중 반쪽폐쇄서 실제 교착 0 (차단 {len(blocked)}건 전부 물류지점 폐쇄=도달불가·정답)")
+          f"3중 반쪽폐쇄서 실제 교착 0 (차단 {len(blocked)}건 전부 도달불가=정답)")
 
 
 def scenario_aging():
@@ -395,8 +397,10 @@ def scenario_blocked_queue():
     after = [(t.id, t.stage, t.robot) for t in tasks]
     assert before == after, "관측 파생이 tasks를 변형(되먹임 금지 위반)"
     assert queue, "차단 큐 비어있음(도달불가 임무 주입됐는데)"
-    false_pos = [q["id"] for q in queue if q["pickup"] not in segs and q["dropoff"] not in segs]
-    assert not false_pos, ("차단 큐 오탐(물류지점 열렸는데 차단)", false_pos)
+    import planner as _P
+    reach = lambda a, b: _P.astar(w, a, b, segs) is not None            # 폐쇄 맵에서 실제 도달 가능?
+    false_pos = [q["id"] for q in queue if reach(dep[0], q["pickup"]) and reach(q["pickup"], q["dropoff"])]
+    assert not false_pos, ("차단 큐 오탐(도달 가능한데 차단)", false_pos)
     print(f"  [차단큐] 개입 큐 {len(queue)}건 전부 도달불가(물류지점 폐쇄)=오탐0 · 되먹임 가드(tasks 불변)")
 
 
