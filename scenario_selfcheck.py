@@ -551,10 +551,11 @@ def scenario_battery():
     assert not all(seen_r0), "탑재 구간(월드에서 들어올림) 미관측"
     order = [ev(t)[0]["tick"] for t in ("battery_dead", "tow_dispatch", "tow_haul", "tow_drop")]
     assert order == sorted(order), ("견인 순서 이상", order)
-    assert ev("charged"), "하역 후 충전 미완(0%→100 사이클)"
+    r0_charged = [e for e in ev("charged") if e.get("robot") == "r0"]
+    assert r0_charged and r0_charged[0]["tick"] > order[3], "방전 로봇(r0)의 하역 후 0→100 충전 미완"
     assert ev("charge_go") and 0 < B["levels"]["r1"] <= 100, "일반 충전行/잔량 회계 이상"
     print(f"  [배터리·견인] 방전 t{order[0]}(에러)→tow 출동 t{order[1]}→탑재 t{order[2]}(운반 {sum(1 for s in seen_r0 if not s)}t)"
-          f"→하역 t{order[3]}→완충 t{ev('charged')[0]['tick']} · tow 주둔 복귀")
+          f"→하역 t{order[3]}→완충 t{r0_charged[0]['tick']} · tow 주둔 복귀")
 
 
 def scenario_nav_trace():

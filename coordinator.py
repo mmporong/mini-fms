@@ -22,6 +22,7 @@ BLOCK_CAP_TICKS = 120 + STUCK_TICKS   # = 150
 #   견인 회복 시 현장 배터리 교체 가정으로 응급 잔량 부여 → LOW라 자연히 충전소행
 BATT_LOW = 25
 BATT_CRIT = 10
+BATT_TOPUP = 90       # 유휴 로봇 짬충전(opportunistic) 임계 — 할 일 없으면 놀지 말고 충전소 대기
 BATT_EMERGENCY = 20   # (tow 미사용 시) 방전 제자리 회복 응급 잔량
 # battery["tow"]={"id":..,"home":cell} 지정 시 진짜 견인 로봇 모드:
 #   주둔(home, 충전지역 좌하단) → 방전 발생 시 출동(dispatch) → 인접 도달 시 탑재(haul, 월드에서 들어올림
@@ -266,11 +267,15 @@ def run_dynamic(world, tasks=None, task_stream=None, obstacle_events=None,
                     robs0[r.id] = _replace(r, task=None, status="idle", goal=r.pos, stuck_ticks=0)
                     log.append({"tick": tick, "type": "battery_return", "robot": r.id})
             world = _replace(world, robots=tuple(robs0[r.id] for r in world.robots))
-            exclude = frozenset(rid for rid in batt      # LOW 이하·충전 중·견인 로봇 = 새 임무 할당 제외
-                                if batt[rid] <= BATT_LOW or rid in charging
-                                or (tow and rid == tow["id"]))
+            exclude = frozenset(rid for rid in batt      # LOW 이하·견인 로봇 = 새 임무 할당 제외
+                                if batt[rid] <= BATT_LOW or (tow and rid == tow["id"]))
+                                # 짬충전(>LOW) 로봇은 제외 안 함 — 임무가 생기면 충전 중단하고 일하러 감
 
         world = assign(world, tasks, exclude)            # 온라인 재할당(긴급 우선, 저배터리 제외)
+        if battery:                                      # 짬충전 중 임무 받은 로봇 → 충전 예약 해제(일 우선)
+            for r in world.robots:
+                if r.task is not None and r.id in charging:
+                    charging.pop(r.id, None)
         world, telem, stepev = sim.step(world)           # 이동(폐쇄·고장 우회 자동)
         for e in stepev:                                 # 자동주행 결정 트레이스(ASPIRE식) — 재경로·양보·교착해소를 버리지 않고 기록
             log.append({"tick": tick, "type": "nav_" + e.get("type", "?"),
@@ -343,10 +348,16 @@ def run_dynamic(world, tasks=None, task_stream=None, obstacle_events=None,
             dispatch = {r.id: r for r in world.robots}
             for r in sorted(world.robots, key=lambda x: batt.get(x.id, 100)):   # 잔량 낮은 로봇부터
                 if (r.task is None and r.alive and r.status != "down"
-                        and batt.get(r.id, 100) <= BATT_LOW and r.id not in charging):
+                        and r.id not in charging and not (tow and r.id == tow["id"])):
+                    lvl = batt.get(r.id, 100)
                     free_ch = [c for c in chargers if c not in occupied_ch and c not in blk]
-                    if not free_ch:
-                        break                            # 충전소 만석 → 다음 tick 재시도
+                    if lvl <= BATT_LOW:
+                        if not free_ch:
+                            break                        # 충전소 만석 → 다음 tick 재시도(LOW 우선권)
+                    elif lvl < BATT_TOPUP and len(free_ch) > 2:
+                        pass                             # 짬충전: 유휴+미완충이면 충전소 대기(LOW용 여유 2칸 남김)
+                    else:
+                        continue
                     target = min(free_ch, key=lambda c: _man(r.pos, c))
                     charging[r.id] = target
                     occupied_ch.add(target)
