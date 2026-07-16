@@ -60,21 +60,31 @@ def gen_stream(wmap, depots, total=90, spawn_every=2, seed=42):
     return stream
 
 
-def package_spawner(pickups, dropoffs, every=2, per=1, seed=42):
-    """끝없는 물류 발생기 — run_dynamic(spawn=...)에 넘길 spawn(tick) 클로저 반환.
-    every tick마다 per개씩 픽업(rack)→배송(dock) 패키지 생성. 12개마다 1개 긴급. seed 고정=재현."""
+def package_spawner(pickups, dropoffs, every=2, per=1, seed=42, avoid_busy=False):
+    """끝없는 물류 발생기 — run_dynamic(spawn=...)에 넘길 spawn(tick, busy) 클로저 반환.
+    every tick마다 per개씩 픽업(rack)→배송(dock) 패키지 생성. 12개마다 1개 긴급. seed 고정=재현.
+    avoid_busy=True면 활성 물류의 픽업·배송 셀을 피해서 추첨(같은 지점에 물류가 안 겹침 — 지점 수가
+    fleet에 비해 충분할 때 사용, 만석이면 그 tick 스킵). 기본 False=기존 동작(테스트·골든 불변)."""
     import random
     rng = random.Random(seed)
     ctr = [0]
 
-    def spawn(tick):
+    def spawn(tick, busy=frozenset()):
         if tick % every:
             return []
+        if not avoid_busy:
+            busy = frozenset()
         out = []
         for _ in range(per):
+            free_p = [c for c in pickups if c not in busy]
+            free_d = [c for c in dropoffs if c not in busy]
+            if not free_p or not free_d:
+                return out                        # 지점 만석 → 이번 tick 스킵(다음에 재시도)
             i = ctr[0]
             ctr[0] += 1
-            p, d = rng.choice(pickups), rng.choice(dropoffs)
+            p, d = rng.choice(free_p), rng.choice(free_d)
+            if avoid_busy:
+                busy = busy | {p, d}
             out.append(Task(f"P{i}", p, d, priority=0 if i % 12 == 5 else 5))
         return out
     return spawn
@@ -203,7 +213,13 @@ def run_dynamic(world, tasks=None, task_stream=None, obstacle_events=None,
                 tasks.append(t)
                 log.append({"tick": tick, "type": "task_spawn", "task": t.id, "urgent": t.priority == 0})
         if spawn is not None:                            # 끝없는 물류 발생(연속 운영)
-            for t in spawn(tick):
+            if spawn.__code__.co_argcount >= 2:          # busy-aware 스포너: 활성 물류 지점 회피(겹침 방지)
+                busy = frozenset(c for t in tasks if t.stage not in ("done", "blocked")
+                                 for c in (t.pickup, t.dropoff))
+                new_tasks = spawn(tick, busy)
+            else:
+                new_tasks = spawn(tick)                  # 하위호환(1-인자 커스텀 스포너)
+            for t in new_tasks:
                 tasks.append(t)
                 log.append({"tick": tick, "type": "task_spawn", "task": t.id, "urgent": t.priority == 0})
         if tick in obstacle_events:                      # 통로 실시간 폐쇄/개방

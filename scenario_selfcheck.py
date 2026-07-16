@@ -493,6 +493,29 @@ def scenario_sla_zones():
     print(f"  [SLA·구역] 폐쇄 주입 p95 {p95_base}→{p95_closed}(상승=원인 추적) · 우하 집중 스폰 구역완료 {zd} · 되먹임 0")
 
 
+def scenario_spawn_no_overlap():
+    """물류 지점 겹침 방지(avoid_busy) — 활성 물류의 픽업·배송 셀에는 새 물류가 스폰되지 않음.
+    대조: 기본(avoid_busy=False)은 중복 허용(기존 동작·골든 불변) vs True는 매 tick 중복 0."""
+    w, dep = M.warehouse()
+    st = M.spread(w, 40)
+    hm = {f"r{i}": st[i] for i in range(40)}
+    pk, dp = M.stations(w, n_pick=40)
+    def run(avoid):
+        rb = tuple(sim.Robot(id=f"r{i}", pos=st[i], goal=st[i], priority=i) for i in range(40))
+        dups = [0]
+        def cb(t, tl, wo, ts, lg):
+            pts = [c for x in ts if x.stage not in ("done", "blocked") for c in (x.pickup, x.dropoff)]
+            if len(pts) != len(set(pts)):
+                dups[0] += 1
+        C.run_dynamic(sim.World(wmap=w, robots=rb), homes=hm, max_ticks=200, on_tick=cb,
+                      spawn=C.package_spawner(pk, dp, every=2, per=2, avoid_busy=avoid))
+        return dups[0]
+    d_on, d_off = run(True), run(False)
+    assert d_on == 0, ("avoid_busy=True인데 물류 지점 중복 발생", d_on)
+    assert d_off > 0, "대조군(기본)서 중복이 없어 검증이 자명"     # 원인(avoid) → 파생(중복 0) 비자명 확인
+    print(f"  [물류겹침방지] avoid_busy 켬: 중복 0 / 끔(대조군): 중복 {d_off}tick — 스포너가 활성 지점 회피")
+
+
 def scenario_idle_fault():
     """유휴 좀비 봉합 — '임무 없는' 로봇에 고장 주입(alive=False)해도 침묵에서 down 파생·회복돼야.
     회귀 근거: 이전엔 detect_and_heal이 task None을 스킵해 유휴/충전行 로봇이 status=moving인 채
@@ -574,6 +597,7 @@ def demo():
     scenario_temp_closure_recovery()  # 차단 오탐 방지(시간 캡: 임시폐쇄 회복·영구폐쇄 정직 차단)
     scenario_sla_zones()     # SLA/구역 지표(인과 2종·되먹임 가드)
     scenario_varied_map()    # 데모 varied 맵 스모크(B-4 사각 봉합)
+    scenario_spawn_no_overlap()  # 물류 지점 겹침 방지(avoid_busy, 대조군 비교)
     scenario_idle_fault()    # 유휴 좀비 봉합(무임무 고장도 down 파생·회복)
     scenario_battery()       # 배터리 사이클(충전行·방전 에러·견인·완충, opt-in)
     scenario_nav_trace()     # 자동주행 결정 트레이스(ASPIRE식·원인→파생)
