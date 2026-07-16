@@ -68,6 +68,18 @@ python test_e2e.py              # HTTP 파이프라인 + 드릴다운
 - `store.py` — SQLite 텔레메트리 시계열
 - `scenario_selfcheck.py` · `selfcheck.py` · `test_e2e.py` — 검증
 
+## 실험·평가 (`python experiments.py` — 결정론, 2회 재실행 동일 assert)
+
+![scale curve](assets/scale_curve.png)
+
+- **스케일 곡선**: 처리량이 **N=40 부근에서 포화** — N=10~20은 공급 부족, N=70+는 혼잡 병목(대기율 10%+)으로 로봇을 더 넣어도 처리량이 하락. 모든 N에서 충돌 0·정상 종료 유지(매 tick assert).
+
+![ablation](assets/ablation.png)
+
+- **정책 ablation**(하나씩 끄고 측정): **aging 끔 → 최악 배송 95→124t**(aging은 평균이 아니라 꼬리/공정성을 사는 메커니즘) · **혼잡비용 끔 → 최악 182t**(같은 우회로 쏠림) · **one-way**는 정상 운영에선 무발동(정직), 3중 반쪽폐쇄 스트레스에서 **완료율 72 vs 58(Δ+14)** — 교착 예방의 fleet 가치.
+- **Negative results**: 긴급/반납 이동 우선순위 부스트 2건은 실측에서 무-교착 불변식을 깨(도달 가능한 태스크 7건/2건 교착) 반려 — 우선 처리는 할당 계층까지, 이동 계층은 aging-공정 유지가 무-교착 경계선.
+- 상세: `docs/mini-fms_실험결과_20260716.md`(physical-ai-lab).
+
 ## 알려진 한계 (정직하게)
 
 - 이산 격자·완전관측·1-tick 이동 — 연속 모션플래닝·상태추정·제어는 미포함.
