@@ -136,6 +136,7 @@ DASHBOARD_HTML = """<!doctype html>
    <span><i class="sw" style="background:#484f58"></i>고장(X)</span>
    <span><i class="sw" style="background:#f0d060"></i>적재(금색 링)</span>
    <span><i class="sw" style="background:#1f6feb"></i>픽업 rack</span><span><i class="sw" style="background:#8a6d1f"></i>배송 dock<span style="color:#ffd766">(숫자=오는 로봇)</span></span>
+   <span><i class="sw" style="background:#2da44e"></i>⚡충전소(좌측 열)·하단 바=배터리</span>
    <span style="color:#8b949e">상태(이동/대기/…)는 위 막대·요약 참고</span>
   </div>
   <div class="logs">
@@ -169,7 +170,8 @@ DASHBOARD_HTML = """<!doctype html>
 const COLOR = {moving:"#3fb950", waiting:"#e3b341", arrived:"#58a6ff", down:"#f85149", idle:"#7d8590", blocked:"#f0883e"};
 const EVKO = {task_spawn:"임무 발생", fault_derived:"고장 파생", recovered:"로봇 회복",
   aisle_close:"통로 폐쇄", aisle_open:"통로 개방", task_reassign:"임무 재배분", task_blocked:"임무 차단(개입)",
-  reroute:"혼잡 재경로", yield_idle:"유휴 양보", deadlock:"교착 해소", oneway:"통로 방향잠금"};
+  reroute:"혼잡 재경로", yield_idle:"유휴 양보", deadlock:"교착 해소", oneway:"통로 방향잠금",
+  charge_go:"충전소行", charged:"완충 복귀", battery_return:"배터리 임무반납", battery_dead:"🔋 방전 정지(에러)", task_churn:"임무 재시도 지속"};
 let MAP=null, STATE={robots:[],dyn_blocked:[],oneway:[],blocked_queue:[],nav_trace:[],metrics:{},events:[]};
 let SPARK=[], SEL=null, LABELMODE=0;   // 시계열 · 선택 로봇 · 라벨(0=번호 1=번호+우선순위 2=끄기)
 
@@ -198,6 +200,7 @@ async function poll(){
   // KPI
   document.getElementById('kpi').innerHTML = [
     ['배송완료', mt.delivered??0], ['적재중', mt.carrying??0], ['대기물류', mt.active??0], ['처리량', (mt.throughput??0)+'/t'],
+    ['평균배터리', (mt.batt_avg??100)+'%'], ['충전중', mt.charging??0], ['방전', mt.batt_dead??0],
     ['고장', mt.faults??0], ['회복', mt.recovered??0], ['차단', mt.blocked??0], ['tick', mt.ticks??0],
   ].map(([l,v])=>`<div class="k"><div class="v">${v}</div><div class="l">${l}</div></div>`).join('');
   // 상태 요약 바
@@ -228,7 +231,7 @@ async function poll(){
     `<span style="color:#3fb950">▬ 처리량 ${mt.throughput??0}/t</span>&nbsp;&nbsp;<span style="color:#e3b341">▬ 대기물류 ${mt.active??0}</span>`;
   // 로봇 드릴다운(선택 로봇 상세 — 우선순위 포함)
   if(SEL){ const sr=R.find(r=>r.id===SEL);
-    let head = sr? `🔍 ${SEL} · ${sr.status}${sr.task?' · 임무 '+sr.task+' · 배송경과 '+sr.age+'t':' · 유휴'}`
+    let head = sr? `🔍 ${SEL} · 🔋${sr.batt}%${sr.charging?'(충전)':''} · ${sr.status}${sr.task?' · 임무 '+sr.task+' · 배송경과 '+sr.age+'t':' · 유휴'}`
                    +` · 우선순위 p${sr.pr}(유효 ${sr.eff}, 대기 ${sr.stuck}t)`
                    +`${sr.wait_reason&&sr.wait_reason!=='none'?' · '+sr.wait_reason:''}` : `🔍 ${SEL}`;
     try{ const {rows}=await (await fetch('/recent?seconds=30&robot_id='+SEL)).json();
@@ -243,10 +246,13 @@ async function poll(){
   // 이벤트(한글)
   document.getElementById('events').textContent =
     (STATE.events||[]).slice(-14).reverse().map(e=>`t${e.tick}  ${EVKO[e.type]||e.type}${e.robot?' '+e.robot:''}${e.task?' '+e.task:''}`).join('\\n');
-  // 경보
-  const downs=R.filter(r=>r.status==='down').map(r=>r.id), al=document.getElementById('alert');
-  if(downs.length){ al.style.display='block';
-    al.textContent='🔴 로봇 고장: '+downs.join(', ')+' — coordinator 재배분 후 회복(towed) 진행'; }
+  // 경보(방전 우선 표시)
+  const dead=R.filter(r=>r.status==='down'&&r.batt<=0).map(r=>r.id);
+  const downs=R.filter(r=>r.status==='down'&&r.batt>0).map(r=>r.id), al=document.getElementById('alert');
+  if(dead.length||downs.length){ al.style.display='block';
+    al.textContent=(dead.length?'🔋 배터리 방전 정지(에러): '+dead.join(', ')+' — 견인 후 응급충전 예정':'')
+      +(dead.length&&downs.length?'  |  ':'')
+      +(downs.length?'🔴 로봇 고장: '+downs.join(', ')+' — 재배분 후 회복(towed)':''); }
   else al.style.display='none';
   // 그리기는 animate()의 requestAnimationFrame 루프가 담당(부드러운 보간)
  }catch(e){ document.getElementById('dot').className='dot off'; document.getElementById('status').textContent='서버 끊김'; }
@@ -276,6 +282,11 @@ function draw(R, cur){
  const px=x=>x*cs+cs/2, py=y=>y*cs+cs/2;
  g.clearRect(0,0,W,H);   // 로봇 색 = 배송 경과(age): 흰=방금·유휴 회색 → 빨강=오래 지연(반납 시 리셋)
  g.fillStyle='#30363d'; for(const [x,y] of MAP.obstacles) g.fillRect(x*cs,y*cs,cs-1,cs-1);           // 선반
+ for(const [x,y] of (MAP.chargers||[])){                                                              // 충전소(좌측 열)
+  g.fillStyle='rgba(63,185,80,.16)'; g.fillRect(x*cs,y*cs,cs-1,cs-1);
+  g.strokeStyle='#2da44e'; g.lineWidth=1; g.strokeRect(x*cs+0.5,y*cs+0.5,cs-2,cs-2);
+  if(cs>=12){ g.fillStyle='#2da44e'; g.font=`${Math.floor(cs*0.55)}px sans-serif`;
+   g.textAlign='center'; g.textBaseline='middle'; g.fillText('⚡', px(x), py(y)); } }
  g.fillStyle='#1f6feb'; for(const [x,y] of (MAP.pickups||[])) g.fillRect(x*cs+cs*0.12,y*cs+cs*0.12,cs*0.76,cs*0.76); // 픽업 rack
  g.fillStyle='#8a6d1f'; for(const [x,y] of (MAP.dropoffs||[])) g.fillRect(x*cs,y*cs,cs-1,cs-1);       // 배송 dock
  const dockWait={};                                                                                    // dock별 대기(배송 오는) 로봇 번호
@@ -321,8 +332,18 @@ function draw(R, cur){
     g.fillText('p'+(r.pr??''), X, Y+rad*0.98);
    }
   }
+  if(r.batt!=null && cs>=11){                                                                          // 배터리 게이지(하단 미니 바)
+   const bw=rad*1.7, bx=X-bw/2, by=Y+rad+cs*0.06, t=r.batt/100;
+   g.fillStyle='#21262d'; g.fillRect(bx,by,bw,Math.max(2,cs*0.11));
+   g.fillStyle= r.batt<=10?'#f85149' : r.batt<=25?'#e3b341' : '#3fb950';
+   g.fillRect(bx,by,bw*t,Math.max(2,cs*0.11));
+  }
+  if(r.charging){ g.fillStyle='#2da44e'; g.font=`bold ${Math.floor(cs*0.5)}px sans-serif`;             // 충전行/충전 중
+   g.textAlign='center'; g.textBaseline='middle'; g.fillText('⚡', X+rad*0.9, Y-rad*0.9); }
   if(r.status==='down'){ g.strokeStyle='#fff'; g.lineWidth=1.5; const d=rad*0.6; g.beginPath();
-   g.moveTo(X-d,Y-d); g.lineTo(X+d,Y+d); g.moveTo(X+d,Y-d); g.lineTo(X-d,Y+d); g.stroke(); }
+   g.moveTo(X-d,Y-d); g.lineTo(X+d,Y+d); g.moveTo(X+d,Y-d); g.lineTo(X-d,Y+d); g.stroke();
+   if(r.batt<=0){ g.fillStyle='#f85149'; g.font=`bold ${Math.floor(cs*0.45)}px sans-serif`;            // 방전 정지 표시
+    g.textAlign='center'; g.fillText('🔋', X, Y-rad-cs*0.18); } }
  }
 }
 function drawSpark(){                                    // 처리량(초록)·백로그(노랑) 시계열 — 면적 채움

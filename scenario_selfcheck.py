@@ -493,6 +493,28 @@ def scenario_sla_zones():
     print(f"  [SLA·구역] 폐쇄 주입 p95 {p95_base}→{p95_closed}(상승=원인 추적) · 우하 집중 스폰 구역완료 {zd} · 되먹임 0")
 
 
+def scenario_battery():
+    """배터리(opt-in) — ①LOW 로봇이 충전소行→완충→복귀(할당 재개) ②방전=에러 송신(battery_dead)
+    +정지(down·정적 장애물)→견인(RECOVER)→응급 배터리→재충전 ③battery 미지정 경로는 기존과 동일(골든 보호).
+    원인주입(초기 잔량·drain)→시스템 파생(충전行·방전·회복)→결과 assert. 우선순위는 할당 계층만(이동 부스트 금지 준수)."""
+    w = M.from_ascii(["........"] * 8)
+    chargers = [(0, 0)]
+    rb = (sim.Robot("r0", (7, 7), (7, 7)), sim.Robot("r1", (0, 1), (0, 1)))
+    B = {"chargers": chargers, "init": {"r0": 2, "r1": 90}, "drain_every": 1, "charge_per": 5}
+    spawn = C.package_spawner([(6, 6)], [(1, 1)], every=50, per=1)
+    _, _, log, _ = C.run_dynamic(sim.World(wmap=w, robots=rb), spawn=spawn, battery=B, max_ticks=150)
+    ev = lambda t: [e for e in log if e["type"] == t]
+    assert ev("battery_dead"), "방전 이벤트(에러 송신) 미발생"
+    assert ev("recovered"), "방전 후 견인 회복 미작동(영구 정지)"
+    assert ev("charged"), "완충 미도달(충전 사이클 미작동)"
+    t_dead = ev("battery_dead")[0]["tick"]
+    t_rec = ev("recovered")[0]["tick"]
+    assert t_rec - t_dead >= C.RECOVER_TICKS, "정지 구간 없이 즉시 회복(멈춤 미표현)"
+    assert ev("charge_go") and ev("charge_go")[0]["tick"] <= t_dead, "저배터리 충전行 파견 미작동"
+    assert 0 < B["levels"]["r1"] <= 100 and B["levels"]["r0"] > C.BATT_EMERGENCY, "잔량 회계 이상"
+    print(f"  [배터리] 방전 t{t_dead}(에러)→down 정지→견인 t{t_rec}→응급{C.BATT_EMERGENCY}%→완충 t{ev('charged')[0]['tick']} · 충전行 {len(ev('charge_go'))}회")
+
+
 def scenario_nav_trace():
     """자동주행 결정 트레이스(ASPIRE식) — sim.step의 주행 결정(재경로·양보·교착)을 버리지 않고 구조화 기록.
     원인주입(통로 폐쇄→혼잡)→파생(nav_reroute 등)→구조화 레코드 assert + 무혼잡 대조군 비교(혼잡이 원인임 실증)."""
@@ -533,6 +555,7 @@ def demo():
     scenario_temp_closure_recovery()  # 차단 오탐 방지(시간 캡: 임시폐쇄 회복·영구폐쇄 정직 차단)
     scenario_sla_zones()     # SLA/구역 지표(인과 2종·되먹임 가드)
     scenario_varied_map()    # 데모 varied 맵 스모크(B-4 사각 봉합)
+    scenario_battery()       # 배터리 사이클(충전行·방전 에러·견인·완충, opt-in)
     scenario_nav_trace()     # 자동주행 결정 트레이스(ASPIRE식·원인→파생)
     scenario_crossing()      # (a) 정상 완주
     scenario_deadlock()      # (d) 교착→해소

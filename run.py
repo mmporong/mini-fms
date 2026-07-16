@@ -27,7 +27,11 @@ BASE = f"http://{HOST}:{PORT}"
 
 W, DEPOTS = M.warehouse(varied=True)                        # 38x27 · 변화형(블록 크기·방향·빈공간 다양화, 시각용)
 N = 40
-STARTS = M.spread(W, N)                                     # 분산 초기 배치(시작부터 안 뭉침)
+CHARGERS = [c for c in DEPOTS if c[0] == 0]                 # 좌측 열(x=0) 한 줄 = 배터리 충전소(통로 밖이라 길 안 막음)
+BATTERY = {"chargers": CHARGERS, "seed": 7,                 # 랜덤 초기 잔량(15~100%, 시드 결정론)
+           "drain_every": 42,                               # 1×속도(~8.3tick/s) 기준 5초당 1% 방전
+           "charge_per": 1.25}                              # 완충 10초 ≈ 83tick(0→100)
+STARTS = M.spread(W, N, reserved=frozenset(CHARGERS))       # 분산 초기 배치(충전소와 안 겹치게)
 HOMES = {f"r{i}": STARTS[i] for i in range(N)}              # 유휴 시 각자 staging 복귀 → 분산
 PICKUPS, DROPOFFS = M.stations(W)                           # 물류 지점(rack 픽업·dock 배송)
 SPAWN = C.package_spawner(PICKUPS, DROPOFFS, every=2, per=1)  # 끝없는 물류
@@ -137,6 +141,8 @@ def on_tick(tick, telem, world, tasks, log):
              "carrying": bool(r.task and stage.get(r.task) == "todropoff"),   # 적재 중(하역지로 운반)
              "dest": (list(dropoff_of[r.task])                                # 배송 목적 dock(대기 넘버링용)
                       if r.task and stage.get(r.task) == "todropoff" else None),
+             "batt": round(BATTERY["levels"].get(r.id, 100)),                 # 배터리 잔량(%)
+             "charging": r.id in BATTERY.get("charging", {}),                 # 충전行/충전 중
              "wait_reason": wr.get(r.id, "none")}
             for r in world.robots]
     if tick % 2 == 0:                                       # DB 발행(드릴다운·파이프라인) — 배치 1커밋(2tick마다)
@@ -174,7 +180,10 @@ def on_tick(tick, telem, world, tasks, log):
         "metrics": {"delivered": delivered, "active": len(tasks),
                     "carrying": sum(1 for s in snap if s["carrying"]),
                     "throughput": round(delivered / max(1, tick), 3),
-                    "faults": faults, "recovered": recovered, "blocked": blocked, "ticks": tick},
+                    "faults": faults, "recovered": recovered, "blocked": blocked, "ticks": tick,
+                    "charging": sum(1 for s in snap if s["charging"]),
+                    "batt_dead": prev.get("batt_dead", 0) + d_of("battery_dead"),
+                    "batt_avg": round(sum(s["batt"] for s in snap) / max(1, len(snap)))},
         "events": [{"tick": e["tick"], "type": e["type"], "robot": e.get("robot"), "task": e.get("task")}
                    for e in log[-16:]],
     }
@@ -184,11 +193,12 @@ def on_tick(tick, telem, world, tasks, log):
 if __name__ == "__main__":
     app_module.MAP = {"width": W.width, "height": W.height,
                       "obstacles": [list(c) for c in W.obstacles],
-                      "pickups": [list(c) for c in PICKUPS], "dropoffs": [list(c) for c in DROPOFFS]}
+                      "pickups": [list(c) for c in PICKUPS], "dropoffs": [list(c) for c in DROPOFFS],
+                      "chargers": [list(c) for c in CHARGERS]}
     threading.Thread(target=uvicorn.Server(
         uvicorn.Config(app_module.app, host=HOST, port=PORT, log_level="error")).run, daemon=True).start()
     time.sleep(1.5)
-    print(f"연속 FMS 관제(40대·끝없는 물류) → {BASE}   (브라우저 열기, Ctrl+C 종료)")
+    print(f"연속 FMS 관제(40대·끝없는 물류·배터리) → {BASE}   (브라우저 열기, Ctrl+C 종료)")
     while True:                                             # 안전 재진입(정상적으론 한 세션이 계속 운영)
         C.run_dynamic(sim.World(wmap=W, robots=robots()), task_stream=BURST, spawn=SPAWN, homes=HOMES,
-                      obstacle_events=OBST, faults=FAULTS, max_ticks=10 ** 7, on_tick=on_tick)
+                      obstacle_events=OBST, faults=FAULTS, battery=BATTERY, max_ticks=10 ** 7, on_tick=on_tick)
