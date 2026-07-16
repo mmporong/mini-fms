@@ -1,0 +1,456 @@
+# -*- coding: utf-8 -*-
+"""M2+ 시나리오 셀프체크 — 다중 로봇 충돌 0 + 교착 감지·해소 assert. 서버 불필요.
+실행: py scenario_selfcheck.py"""
+import hashlib
+import sys
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
+import gridmap as M
+import sim
+import coordinator as C
+
+# 골든-궤적 baseline(그린 코드에서 동결) — 코어 리팩터가 궤적을 바꾸는지 감지.
+# ticks==ticks2는 tick 총수만 비교라 궤적 드리프트(같은 총tick, 다른 경로)를 못 잡음 → frame-단위 지문으로 보완.
+GOLDEN = {
+    "crossing": "830e0b604499c7c7430fd1eb8df4b3bb22445c316ed19a2bd01c6e6c2cca7b63",
+    "deadlock": "f228d7fc32cdf3c6c7e2958b53e5e5ec2ec64cc714e347218565c96ace2a7f63",
+    "scale": "b76eb13ee22a6288eabd9239528396ce23db1f4799fbb19d76698f8ed62577f7",
+    "continuous": "fef6ef80dee3956b7199105da63d314b14436276274575a5c47383dbe1d6f7de",
+    "gridlock": "62b585f63af3391b33e608fc728b2a455c452654b0a03bacb2c2d6f403ea70f3",
+}
+
+
+def _hash_frames(frames):
+    return hashlib.sha256(repr(frames).encode()).hexdigest()
+
+
+def _frames_sim(world, max_ticks=80):
+    """sim.step 루프 궤적 지문 — tick별 정렬 (id,x,y) 시퀀스."""
+    fr = []
+    for _ in range(max_ticks):
+        world, telem, _ = sim.step(world)
+        fr.append(tuple(sorted((t["robot_id"], t["metrics"]["x"], t["metrics"]["y"]) for t in telem)))
+        if all(r.status in ("arrived", "down", "blocked") for r in world.robots):
+            break
+    return fr
+
+
+def _frames_dynamic(world, **kw):
+    """run_dynamic 궤적 지문 — on_tick으로 tick별 정렬 (id,x,y) 수집."""
+    fr = []
+    kw.pop("on_tick", None)
+    C.run_dynamic(world, on_tick=lambda t, tl, wo, ts, lg:
+                  fr.append(tuple(sorted((x["robot_id"], x["metrics"]["x"], x["metrics"]["y"]) for x in tl))), **kw)
+    return fr
+
+
+def _golden_hashes():
+    """골든게이트 대상 시나리오(코어 _corridor_gates를 강하게 경유)의 궤적 지문 재계산."""
+    o = {}
+    wm = M.from_ascii(["........"] * 8)
+    corners = [((0, 0), (7, 7)), ((7, 0), (0, 7)), ((0, 7), (7, 0)), ((7, 7), (0, 0))]
+    o["crossing"] = _hash_frames(_frames_sim(sim.World(wmap=wm, robots=tuple(
+        sim.plan_robot(wm, sim.Robot(id=f"r{i}", pos=s, goal=g, priority=i)) for i, (s, g) in enumerate(corners)))))
+    wm2 = M.from_ascii(["#######", "#.....#", "###.###", "#######"])
+    o["deadlock"] = _hash_frames(_frames_sim(sim.World(wmap=wm2, robots=(
+        sim.plan_robot(wm2, sim.Robot(id="A", pos=(1, 1), goal=(5, 1), priority=0)),
+        sim.plan_robot(wm2, sim.Robot(id="B", pos=(5, 1), goal=(1, 1), priority=1))))))
+    w, dep = M.warehouse()
+    cx = w.width // 2
+    ai = [(cx, y) for y in range(w.height) if w.is_free((cx, y))]
+    o["scale"] = _hash_frames(_frames_dynamic(
+        sim.World(wmap=w, robots=tuple(sim.Robot(id=f"r{i}", pos=dep[i], goal=dep[i], priority=i) for i in range(40))),
+        task_stream=C.gen_stream(w, dep, total=90, spawn_every=2), obstacle_events={35: ("close", ai), 95: ("open", ai)},
+        faults={40: "r5", 70: "r12", 110: "r20", 150: "r8"}, max_ticks=1500))
+    st = M.spread(w, 40)
+    hm = {f"r{i}": st[i] for i in range(40)}
+    pk, dp = M.stations(w)
+    o["continuous"] = _hash_frames(_frames_dynamic(
+        sim.World(wmap=w, robots=tuple(sim.Robot(id=f"r{i}", pos=st[i], goal=st[i], priority=i) for i in range(40))),
+        spawn=C.package_spawner(pk, dp, every=3, per=1), homes=hm,
+        obstacle_events={80: ("close", ai), 160: ("open", ai)}, faults={60: "r5", 140: "r12"}, max_ticks=400))
+    segs = frozenset((c, y) for c in (7, 13, 19) for y in range(3, w.height - 3) if w.is_free((c, y)))
+    o["gridlock"] = _hash_frames(_frames_dynamic(
+        sim.World(wmap=w, robots=tuple(sim.Robot(id=f"r{i}", pos=dep[i], goal=dep[i], priority=i) for i in range(40))),
+        task_stream=C.gen_stream(w, dep, total=90, spawn_every=2),
+        obstacle_events={15: ("close", list(segs))}, max_ticks=2500))
+    return o
+
+
+def scenario_golden():
+    """골든-궤적 회귀 게이트 — 코어 리팩터(M1 _corridor_state 추출 등) 후에도 궤적이 frame-단위 동일함을 assert."""
+    cur = _golden_hashes()
+    for name, h in GOLDEN.items():
+        assert cur.get(name) == h, ("골든 궤적 드리프트", name, "expected", h, "got", cur.get(name))
+    assert cur == _golden_hashes(), "골든 캡처 비결정론"   # 2회 동일
+    print(f"  [골든게이트] {len(GOLDEN)}개 시나리오 궤적 frame-동일(드리프트 0) · 캡처 결정론 OK")
+
+
+def _run_checked(world, max_ticks=400):
+    """run하되 매 tick 위치 유일성(충돌 0) 검사. 반환: (final, ticks, events_all)."""
+    assert len({r.pos for r in world.robots}) == len(world.robots), "초기 충돌"
+    events_all, ticks = [], 0
+    for _ in range(max_ticks):
+        world, telem, events = sim.step(world)
+        events_all += events
+        cells = [(t["metrics"]["x"], t["metrics"]["y"]) for t in telem]
+        assert len(cells) == len(set(cells)), ("충돌 발생", world.tick, cells)   # 충돌 0
+        ticks = world.tick
+        if all(r.status in ("arrived", "down", "blocked") for r in world.robots):
+            break
+    return world, ticks, events_all
+
+
+def scenario_crossing():
+    """4대 교차 이동 → 충돌 0 + 전원 도착 + 결정론."""
+    wmap = M.from_ascii(["........"] * 8)
+    corners = [((0, 0), (7, 7)), ((7, 0), (0, 7)), ((0, 7), (7, 0)), ((7, 7), (0, 0))]
+    make = lambda: sim.World(wmap=wmap, robots=tuple(
+        sim.plan_robot(wmap, sim.Robot(id=f"r{i}", pos=s, goal=g, priority=i))
+        for i, (s, g) in enumerate(corners)))
+    final, ticks, _ = _run_checked(make())
+    assert all(r.pos == r.goal for r in final.robots), ("미도착", [(r.id, r.pos, r.goal) for r in final.robots])
+    final2, ticks2, _ = _run_checked(make())
+    assert ticks == ticks2, "비결정론"
+    print(f"  [교차] 충돌 0 · 4대 전원 도착 · {ticks}tick · 결정론 OK")
+
+
+def scenario_deadlock():
+    """1-wide 통로 face-off + passing bay(3,2) → 교착 감지·해소 → 전원 도착."""
+    wmap = M.from_ascii([
+        "#######",
+        "#.....#",   # 통로 (1,1)-(5,1)
+        "###.###",   # bay (3,2)
+        "#######",
+    ])
+    a = sim.plan_robot(wmap, sim.Robot(id="A", pos=(1, 1), goal=(5, 1), priority=0))
+    b = sim.plan_robot(wmap, sim.Robot(id="B", pos=(5, 1), goal=(1, 1), priority=1))
+    final, ticks, events = _run_checked(sim.World(wmap=wmap, robots=(a, b)))
+    resolved = any(e.get("type") == "deadlock" and e.get("status") == "resolving" for e in events)
+    assert resolved, "교착 해소 이벤트 없음(교착이 발생·해소됐어야)"
+    assert all(r.pos == r.goal for r in final.robots), ("교착 후 미도착", [(r.id, r.pos) for r in final.robots])
+    print(f"  [교착] 통로 face-off 감지·bay 양보 해소 · 전원 도착 · {ticks}tick")
+
+
+def scenario_fms_normal():
+    """정상 FMS: 2 로봇·2 작업 → 전원 완주(고장 없음)."""
+    wmap = M.from_ascii(["........"] * 8)
+    world = sim.World(wmap=wmap, robots=(
+        sim.Robot("r0", (0, 0), (0, 0)), sim.Robot("r1", (7, 7), (7, 7))))
+    tasks = [C.Task("t1", (2, 2), (6, 6)), C.Task("t2", (5, 1), (1, 5))]
+    _, tasks, _, _ = C.run_fms(world, tasks)
+    assert all(t.stage == "done" for t in tasks), ("미완 작업", [(t.id, t.stage) for t in tasks])
+    print("  [FMS 정상] 2작업 전원 완주")
+
+
+def scenario_fault_heal():
+    """고장 자가치유: r0 작업 중 원인(alive=False) 주입 → coordinator가 down 파생 → 재배분 → r1 완주.
+    개방 맵이라 고장 로봇이 재배분 경로의 유일통로를 봉쇄하지 않음(MAJOR-2 대칭 보장)."""
+    wmap = M.from_ascii(["........"] * 8)
+    world = sim.World(wmap=wmap, robots=(
+        sim.Robot("r0", (0, 0), (0, 0)), sim.Robot("r1", (7, 0), (7, 0))))
+    tasks = [C.Task("t1", (3, 3), (6, 6))]
+    final, tasks, log, _ = C.run_fms(world, tasks, faults={3: "r0"})   # 원인만 주입(alive=False)
+    derived = [e for e in log if e["type"] == "fault_derived" and e["robot"] == "r0"]
+    assert derived, "coordinator가 r0 고장을 파생하지 않음(claim-heartbeat 미작동)"
+    r0 = next(r for r in final.robots if r.id == "r0")
+    assert r0.status == "down", ("r0 down 파생 안 됨", r0.status)   # 라벨은 coordinator가 붙임
+    assert all(t.stage == "done" for t in tasks), ("재배분 후 미완", [(t.id, t.stage, t.robot) for t in tasks])
+    print(f"  [FMS 고장치유] r0 원인주입→coordinator가 down 파생(tick {derived[0]['tick']})→재배분→완주")
+
+
+def scenario_reroute():
+    """통로 막힘→재경로: 정적 장애 로봇 B가 r0의 직선 경로를 막아 r0가 우회(개방 맵이라 대체 경로 존재)."""
+    wmap = M.from_ascii(["........"] * 3)
+    blocker = sim.Robot(id="B", pos=(4, 0), goal=(4, 0), status="down")   # (4,0) 영구 점유
+    r0 = sim.plan_robot(wmap, sim.Robot(id="r0", pos=(0, 0), goal=(7, 0)))  # 초기 직선 계획이 (4,0) 관통
+    final, ticks, _ = _run_checked(sim.World(wmap=wmap, robots=(r0, blocker)))
+    r0f = next(r for r in final.robots if r.id == "r0")
+    assert r0f.pos == (7, 0), ("재경로 후 미도착", r0f.pos)   # (4,0) 막혔으므로 도착=우회 증명
+    print(f"  [재경로] 막힌 통로 우회 도착 · {ticks}tick")
+
+
+def scenario_emergency():
+    """긴급 임무(priority 0)가 일반 임무보다 먼저 배정된다(온라인 우선순위)."""
+    wmap = M.from_ascii(["........"] * 4)
+    world = sim.World(wmap=wmap, robots=(sim.Robot("r0", (0, 0), (0, 0)),))
+    tasks = [C.Task("NORM", (1, 1), (2, 2), priority=5), C.Task("EMG", (6, 1), (7, 2), priority=0)]
+    world = C.assign(world, tasks)
+    assert world.robots[0].task == "EMG", ("긴급 우선 배정 실패", world.robots[0].task)
+    print("  [긴급] 긴급 임무가 일반보다 먼저 배정")
+
+
+def scenario_dynamic():
+    """동적 세계 — 연속 임무 스트림 + 통로 실시간 폐쇄/개방 + 연쇄 고장 + 긴급 임무에 온라인 재조율.
+    고정 스케줄이 아니라 매 tick 바뀌는 상황에 fleet이 반응(재할당·폐쇄우회·자가치유)."""
+    wmap = M.from_ascii([
+        "..............",
+        ".##..##..##...",
+        ".##..##..##...",
+        "..............",
+        ".##..##..##...",
+        ".##..##..##...",
+        "..............",
+    ])
+    robots = tuple(sim.Robot(id=f"r{i}", pos=p, goal=p, priority=i)
+                   for i, p in enumerate([(0, 3), (4, 3), (9, 3), (13, 3)]))
+    world = sim.World(wmap=wmap, robots=robots)
+    stream = {                                   # 연속 임무(창고가 멈추지 않음)
+        1: [C.Task("t1", (0, 0), (13, 6)), C.Task("t2", (13, 0), (0, 6))],
+        10: [C.Task("t3", (0, 6), (13, 0))],
+        18: [C.Task("EMG", (6, 0), (6, 6), priority=0)],   # 긴급
+    }
+    obst = {12: ("close", [(6, 3), (7, 3)]), 30: ("open", [(6, 3), (7, 3)])}   # 통로 폐쇄→개방
+    faults = {15: "r1", 25: "r2"}                # 연쇄 고장
+    final, tasks, log, metrics = C.run_dynamic(world, task_stream=stream, obstacle_events=obst, faults=faults)
+    assert all(t.stage == "done" for t in tasks), ("미완 임무", [(t.id, t.stage) for t in tasks])
+    assert len([e for e in log if e["type"] == "fault_derived"]) >= 2, "연쇄 고장 2건 파생 안 됨"
+    assert any(e["type"] == "aisle_close" for e in log), "통로 폐쇄 이벤트 없음"
+    assert next(t for t in tasks if t.id == "EMG").stage == "done", "긴급 임무 미완"
+    print(f"  [동적] 임무 {metrics['spawned']}개(긴급 포함) 전원 완주 · 통로 폐쇄·개방 · "
+          f"연쇄고장 {metrics['faults']}건 자가치유 · throughput {metrics['throughput']} · {metrics['ticks']}tick")
+
+
+def scenario_scale():
+    """현업 규모 — 38x27 창고·로봇 40대·임무 90건·연쇄 고장·통로 실시간 폐쇄.
+    매 tick 충돌 0 + 영구 정지 없음(정상 종료)을 assert. 회복(towed 복귀)·정체 재배분·
+    도달불가 차단으로 fleet이 어떤 상황에도 멈추지 않음을 실증(스크린샷 전원정지 버그 회귀 방지)."""
+    w, depots = M.warehouse()
+    robots = tuple(sim.Robot(id=f"r{i}", pos=depots[i], goal=depots[i], priority=i) for i in range(40))
+    stream = C.gen_stream(w, depots, total=90, spawn_every=2)
+    faults = {40: "r5", 70: "r12", 110: "r20", 150: "r8"}
+    cx = w.width // 2
+    aisle = [(cx, y) for y in range(w.height) if w.is_free((cx, y))]
+    obst = {35: ("close", aisle), 95: ("open", aisle)}
+    breaches = []
+
+    def check(tick, telem, world, tasks, log):
+        cells = [(t["metrics"]["x"], t["metrics"]["y"]) for t in telem]
+        if len(cells) != len(set(cells)):
+            breaches.append(tick)
+
+    final, tasks, log, m = C.run_dynamic(sim.World(wmap=w, robots=robots), task_stream=stream,
+                                         obstacle_events=obst, faults=faults, max_ticks=1500, on_tick=check)
+    assert not breaches, ("충돌 발생 tick", breaches[:5])
+    assert m["ticks"] < 1500, ("영구 정지(타임아웃) — 전원정지 회귀", m)      # 정상 종료 = 안 멈춤
+    assert all(t.stage in ("done", "blocked") for t in tasks), "미종결 임무 존재"
+    assert m["completed"] >= 80, ("완주율 저조", m["completed"])              # 90 중 대부분 완주
+    assert len([e for e in log if e["type"] == "recovered"]) >= 1, "고장 회복 미작동"
+    print(f"  [현업규모] 40대·90임무 · 충돌 0 · 완료 {m['completed']}/90 차단 {m['blocked']} · "
+          f"회복 {len([e for e in log if e['type']=='recovered'])}건 · 처리량 {m['throughput']} · {m['ticks']}tick(정상종료)")
+
+
+def scenario_continuous():
+    """연속 운영 — 끝없는 물류 스폰(spawn) + 유휴 로봇 분산 복귀(homes). 한 번 끝나고 마는 게 아니라
+    조기종료 없이 계속 배송. 태스크 리스트 유한 유지(pruning), 매 tick 정점+간선 충돌 0,
+    적재(carrying=하역지로 운반) 상태 파생, 초기 분산 배치(시작부터 안 뭉침) 검증."""
+    w, depots = M.warehouse()
+    N = 40
+    starts = M.spread(w, N)
+    assert len(set(starts)) == N, "초기 분산 배치 중복"
+    homes = {f"r{i}": starts[i] for i in range(N)}
+    robots = tuple(sim.Robot(id=f"r{i}", pos=starts[i], goal=starts[i], priority=i) for i in range(N))
+    pickups, dropoffs = M.stations(w)
+    spawn = C.package_spawner(pickups, dropoffs, every=3, per=1)
+    faults = {60: "r5", 140: "r12"}
+    cx = w.width // 2
+    aisle = [(cx, y) for y in range(w.height) if w.is_free((cx, y))]
+    obst = {80: ("close", aisle), 160: ("open", aisle)}
+    prev, vertex, edge, sizes, carry = {}, [], [], [], []
+
+    def check(tick, telem, world, tasks, log):
+        pos = {t["robot_id"]: (t["metrics"]["x"], t["metrics"]["y"]) for t in telem}
+        cells = list(pos.values())
+        if len(cells) != len(set(cells)):
+            vertex.append(tick)                       # 정점 겹침(같은 칸)
+        for a in pos:
+            for b in pos:
+                if a < b and prev.get(a) == pos.get(b) and prev.get(b) == pos.get(a) and prev.get(a) != pos.get(a):
+                    edge.append(tick)                 # 간선 겹침(자리 맞바꿈=서로 통과)
+        prev.clear()
+        prev.update(pos)
+        sizes.append(len(tasks))
+        stage = {t.id: t.stage for t in tasks}
+        carry.append(sum(1 for r in world.robots if r.task and stage.get(r.task) == "todropoff"))
+
+    _, tasks, log, m = C.run_dynamic(sim.World(wmap=w, robots=robots), spawn=spawn, homes=homes,
+                                     obstacle_events=obst, faults=faults, max_ticks=400, on_tick=check)
+    assert m["ticks"] == 400, ("연속 모드가 조기종료됨", m["ticks"])       # 끝없이 운영(한 번에 안 끝남)
+    assert not vertex and not edge, ("겹침 발생", vertex[:3], edge[:3])     # 정점+간선 충돌 0
+    assert max(sizes) < 200, ("태스크 리스트 무한 성장(pruning 실패)", max(sizes))
+    assert m["completed"] >= 50, ("배송 저조", m["completed"])
+    assert max(carry) > 0, "적재(carrying) 로봇 파생 안 됨"
+    print(f"  [연속물류] 끝없이 운영({m['ticks']}tick) · 배송 {m['completed']}건 · 최대 적재 {max(carry)}대 · "
+          f"백로그 최대 {max(sizes)}(유한) · 정점·간선 충돌 0 · 분산 배치")
+
+
+def scenario_gridlock():
+    """1-wide 양방향 교착 완전 해소 — ① 정지(도착) 로봇이 대기 로봇의 유일 경로를 막으면 bay로 비켜섬(길 터주기)
+    ② 1-wide 통로 정면충돌: 통로 방향 잠금(soft one-way) + 재경로로 해소 ③ 3중 반쪽-폐쇄서 '실제 교착 0'
+    (차단은 물류지점 셀이 폐쇄돼 도달불가한 경우뿐 = 정답. 통로 게이트가 정면 교착 자체를 형성 안 시킴)."""
+    # ① 정지 로봇 길막음: d가 목표(1,1) 도착 후 c의 유일 통로 봉쇄 → d가 bay로 비켜야 c 완주
+    w = M.from_ascii(["..#....", ".......", "..#...."])
+    rob = (sim.plan_robot(w, sim.Robot("a", (0, 1), (6, 1), priority=0)),
+           sim.plan_robot(w, sim.Robot("b", (1, 1), (5, 1), priority=1)),
+           sim.plan_robot(w, sim.Robot("c", (6, 1), (0, 1), priority=2)),
+           sim.plan_robot(w, sim.Robot("d", (5, 1), (1, 1), priority=3)))
+    final, ticks, ev = _run_checked(sim.World(wmap=w, robots=rob), max_ticks=100)
+    assert all(r.pos == r.goal for r in final.robots), ("정지로봇 길막음 미해소", [(r.id, r.pos, r.goal) for r in final.robots])
+    assert any(e.get("type") == "yield_idle" for e in ev), "유휴 양보(길 터주기) 이벤트 없음"
+    # ② 1-wide 정면충돌: bay 있는 통로 양끝에서 마주봄 → 통로 게이트로 한쪽 대기·한쪽 통과
+    w2 = M.from_ascii(["..#..#..", "........", "..#..#.."])
+    face = (sim.plan_robot(w2, sim.Robot("x", (0, 1), (7, 1), priority=0)),
+            sim.plan_robot(w2, sim.Robot("y", (7, 1), (0, 1), priority=1)))
+    fin2, t2, _ = _run_checked(sim.World(wmap=w2, robots=face), max_ticks=60)
+    assert all(r.pos == r.goal for r in fin2.robots), ("1-wide 정면충돌 미해소", [(r.id, r.pos) for r in fin2.robots])
+    # ③ 3중 반쪽-아이슬 폐쇄 → 통로 게이트/재경로로 실제 교착 0 (차단은 물류지점이 폐쇄된 것뿐)
+    w3, depots = M.warehouse()
+    segs = frozenset((cx, y) for cx in (7, 13, 19) for y in range(3, w3.height - 3) if w3.is_free((cx, y)))
+    robots = tuple(sim.Robot(id=f"r{i}", pos=depots[i], goal=depots[i], priority=i) for i in range(40))
+    stream = C.gen_stream(w3, depots, total=90, spawn_every=2)
+    _, tasks, log, m = C.run_dynamic(sim.World(wmap=w3, robots=robots), task_stream=stream,
+                                     obstacle_events={15: ("close", list(segs))}, max_ticks=2500)
+    blocked = [t for t in tasks if t.stage == "blocked"]
+    true_gridlock = [t for t in blocked if t.pickup not in segs and t.dropoff not in segs]
+    assert not true_gridlock, ("실제 교착 발생(물류지점 열렸는데 차단)", [t.id for t in true_gridlock])
+    print(f"  [교착해소] 정지로봇 길막음({ticks}t·yield_idle) + 1-wide 정면충돌 통과({t2}t) + "
+          f"3중 반쪽폐쇄서 실제 교착 0 (차단 {len(blocked)}건 전부 물류지점 폐쇄=도달불가·정답)")
+
+
+def scenario_aging():
+    """기아 방지(aging) — 배송이 지연될수록 이동 우선순위↑, 양보 대상서 빠짐. 오래 기다린 로봇이 먼저 통과.
+    aging 켬(기본 3) vs 끔(0)에서 '최장 배송 소요'가 줄어듦을 assert(굶는 배송 방지)."""
+    w, depots = M.warehouse()
+    N = 40
+    starts = M.spread(w, N)
+    homes = {f"r{i}": starts[i] for i in range(N)}
+    pickups, dropoffs = M.stations(w)
+    cx = w.width // 2
+    ai = [(cx, y) for y in range(w.height) if w.is_free((cx, y))]
+
+    def worst(aging):
+        old = sim.AGING
+        sim.AGING = aging
+        try:
+            robots = tuple(sim.Robot(id=f"r{i}", pos=starts[i], goal=starts[i], priority=i) for i in range(N))
+            spawn = C.package_spawner(pickups, dropoffs, every=3, per=1)
+            born, life = {}, []
+
+            def cb(t, tl, wo, ts, lg):
+                for x in ts:
+                    born.setdefault(x.id, t)
+                for x in ts:
+                    if x.stage == "done":
+                        life.append(t - born[x.id])   # 스폰→완료 소요
+            C.run_dynamic(sim.World(wmap=w, robots=robots), spawn=spawn, homes=homes,
+                          obstacle_events={80: ("close", ai), 160: ("open", ai)}, max_ticks=400, on_tick=cb)
+            return max(life) if life else 0
+        finally:
+            sim.AGING = old
+
+    off, on = worst(0), worst(3)
+    assert on < off, ("aging이 최장 배송을 못 줄임(기아 방지 실패)", off, on)
+    print(f"  [기아방지] 최장 배송 소요 aging끔 {off}tick → 켬 {on}tick (지연된 배송 우선 이동)")
+
+
+def scenario_oneway():
+    """one-way 관측(corridor_locks) — 경합 통로에서 lock 방향이 허용 방향과 일치, 허용방향 로봇 전진·역방향 gate,
+    wait_reason=corridor_gate, corridor_locks는 순수 읽기(step 결과 불변). 원인주입→파생→비자명 assert."""
+    w = M.from_ascii(["..#..", ".....", "..#.."])   # (2,1)=단일칸 pinch(상하 벽)
+    mk = lambda: (sim.plan_robot(w, sim.Robot("x", (1, 1), (4, 1), priority=0)),   # 서→동(높은 우선)
+                  sim.plan_robot(w, sim.Robot("y", (3, 1), (0, 1), priority=1)))   # 동→서
+    world = sim.World(wmap=w, robots=mk())
+    locks = sim.corridor_locks(world)
+    assert locks and [tuple(c) for c in locks[0]["cells"]] == [(2, 1)] and locks[0]["dir"] == [1, 0], \
+        ("경합 lock 방향 틀림", locks)                                             # x(동쪽=+x) 우선 → dir=[1,0]
+    a1, _, _ = sim.step(sim.World(wmap=w, robots=mk()))
+    sim.corridor_locks(sim.World(wmap=w, robots=mk()))                            # 순수성: 호출이 step에 되먹임 없음
+    a2, _, _ = sim.step(sim.World(wmap=w, robots=mk()))
+    assert tuple(r.pos for r in a1.robots) == tuple(r.pos for r in a2.robots), "corridor_locks가 step에 되먹임"
+    w2, tl, _ = sim.step(world)
+    pos = {r.id: r.pos for r in w2.robots}
+    assert pos["x"] == (2, 1), ("허용방향 로봇 미전진", pos["x"])                  # lock.dir 방향 로봇 전진
+    assert pos["y"] == (3, 1), ("역방향 로봇 gate 안 됨", pos["y"])                # 반대방향 gated(대기)
+    wr = {t["robot_id"]: t["metrics"]["wait_reason"] for t in tl}
+    assert wr["y"] == "corridor_gate", ("wait_reason 원인 불일치", wr)
+    fin, ticks, _ = _run_checked(sim.World(wmap=w, robots=mk()), max_ticks=40)
+    assert all(r.pos == r.goal for r in fin.robots), ("one-way 후 미완주", [(r.id, r.pos) for r in fin.robots])
+    print(f"  [one-way] 경합 lock dir 정확 + 허용방향 전진·역방향 gate + wait_reason=corridor_gate + 순수읽기 + 완주 {ticks}t")
+
+
+def scenario_blocked_queue():
+    """차단(개입) 큐 — stage=='blocked' 파생이 오탐 0(전부 물류지점 폐쇄=도달불가) + 되먹임 가드(관측이 tasks 불변).
+    원인주입(물류지점 셀 폐쇄)→파생(blocked)→비자명 assert(열린 지점인데 차단 = FAIL)."""
+    w, dep = M.warehouse()
+    segs = frozenset((c, y) for c in (7, 13, 19) for y in range(3, w.height - 3) if w.is_free((c, y)))
+    rb = tuple(sim.Robot(id=f"r{i}", pos=dep[i], goal=dep[i], priority=i) for i in range(40))
+    _, tasks, log, m = C.run_dynamic(sim.World(wmap=w, robots=rb),
+                                     task_stream=C.gen_stream(w, dep, total=90, spawn_every=2),
+                                     obstacle_events={15: ("close", list(segs))}, max_ticks=2500)
+    before = [(t.id, t.stage, t.robot) for t in tasks]                 # 되먹임 가드 baseline
+    queue = [{"id": t.id, "pickup": t.pickup, "dropoff": t.dropoff}    # 관측 파생(read-only)
+             for t in tasks if t.stage == "blocked"]
+    after = [(t.id, t.stage, t.robot) for t in tasks]
+    assert before == after, "관측 파생이 tasks를 변형(되먹임 금지 위반)"
+    assert queue, "차단 큐 비어있음(도달불가 임무 주입됐는데)"
+    false_pos = [q["id"] for q in queue if q["pickup"] not in segs and q["dropoff"] not in segs]
+    assert not false_pos, ("차단 큐 오탐(물류지점 열렸는데 차단)", false_pos)
+    print(f"  [차단큐] 개입 큐 {len(queue)}건 전부 도달불가(물류지점 폐쇄)=오탐0 · 되먹임 가드(tasks 불변)")
+
+
+def scenario_nav_trace():
+    """자동주행 결정 트레이스(ASPIRE식) — sim.step의 주행 결정(재경로·양보·교착)을 버리지 않고 구조화 기록.
+    원인주입(통로 폐쇄→혼잡)→파생(nav_reroute 등)→구조화 레코드 assert + 무혼잡 대조군 비교(혼잡이 원인임 실증)."""
+    w, dep = M.warehouse()
+    segs = frozenset((c, y) for c in (7, 13, 19) for y in range(3, w.height - 3) if w.is_free((c, y)))
+    rb = tuple(sim.Robot(id=f"r{i}", pos=dep[i], goal=dep[i], priority=i) for i in range(40))
+    _, _, log, _ = C.run_dynamic(sim.World(wmap=w, robots=rb),
+                                 task_stream=C.gen_stream(w, dep, total=90, spawn_every=2),
+                                 obstacle_events={15: ("close", list(segs))}, max_ticks=800)
+    nav = [e for e in log if e["type"].startswith("nav_")]
+    kinds = sorted(set(e["type"] for e in nav))
+    assert "nav_reroute" in kinds, ("혼잡 주입인데 재경로 트레이스 없음", kinds)
+    assert all("tick" in e and "robot" in e for e in nav), "트레이스 레코드 비구조화"
+    rb2 = tuple(sim.Robot(id=f"r{i}", pos=dep[i], goal=dep[i], priority=i) for i in range(40))
+    _, _, log2, _ = C.run_dynamic(sim.World(wmap=w, robots=rb2),
+                                  task_stream=C.gen_stream(w, dep, total=90, spawn_every=2), max_ticks=800)
+    closed = sum(1 for e in log if e["type"] == "nav_reroute")
+    openrun = sum(1 for e in log2 if e["type"] == "nav_reroute")
+    assert closed > openrun, ("재경로가 혼잡에서 파생됨을 실증 못함", closed, openrun)
+    print(f"  [주행트레이스] nav 레코드 {len(nav)}건{kinds} 구조화 · 혼잡시 재경로 {closed} > 무혼잡 {openrun}(원인=혼잡 실증)")
+
+
+def scenario_hysteresis():
+    """방향 hysteresis(순수함수 smooth_locks) — aging이 통로 방향을 뒤집어 lock.dir이 volatile.
+    단발 flip 억제 / 새 방향 hold연속 시 전파 / 새 lock 즉시 채택. 데이터계층 검증(육안·DOM 아님)."""
+    A, B = (1, 0), (-1, 0)
+    assert sim.smooth_locks([A, A, B, A, A], hold=3) == [A, A, A, A, A], "단발 flip 미억제"
+    assert sim.smooth_locks([A, A, B, B, B, B], hold=3) == [A, A, A, A, B, B], "지속 flip 미전파"
+    assert sim.smooth_locks([None, A, A], hold=3) == [None, A, A], "새 lock 즉시 채택 실패"
+    print("  [hysteresis] 단발 flip 억제 · 지속 flip(hold=3) 전파 · 새 lock 즉시 채택")
+
+
+def demo():
+    scenario_golden()        # 골든-궤적 게이트(코어 리팩터 드리프트 감지)
+    scenario_oneway()        # one-way 관측(corridor_locks·wait_reason)
+    scenario_hysteresis()    # 방향 hysteresis(smooth_locks)
+    scenario_blocked_queue() # 차단(개입) 큐(오탐0·되먹임 가드)
+    scenario_nav_trace()     # 자동주행 결정 트레이스(ASPIRE식·원인→파생)
+    scenario_crossing()      # (a) 정상 완주
+    scenario_deadlock()      # (d) 교착→해소
+    scenario_gridlock()      # 교착 심화(정지로봇 길막음·다중 우회 혼잡)
+    scenario_aging()         # 기아 방지(지연된 배송 우선 이동)
+    scenario_reroute()       # (c) 통로 막힘→재경로
+    scenario_fms_normal()
+    scenario_fault_heal()    # (b) 고장→자가치유
+    scenario_emergency()     # 긴급 우선 배정
+    scenario_dynamic()       # 동적 세계 통합(연속·폐쇄·연쇄고장·긴급)
+    scenario_scale()         # 현업 규모(40대·90임무·충돌0·영구정지 없음)
+    scenario_continuous()    # 연속 물류 운영(끝없음·적재/하역·분산·충돌0)
+    print("시나리오 셀프체크 통과 — (a)정상 (b)고장자가치유 (c)재경로 (d)교착해소 + 교착심화·기아방지·긴급·동적세계 + 현업규모 + 연속물류 + 충돌0")
+
+
+if __name__ == "__main__":
+    demo()

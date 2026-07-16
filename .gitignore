@@ -1,0 +1,3 @@
+telemetry.db*
+__pycache__/
+*.log
