@@ -22,7 +22,7 @@ BLOCK_CAP_TICKS = 120 + STUCK_TICKS   # = 150
 #   견인 회복 시 현장 배터리 교체 가정으로 응급 잔량 부여 → LOW라 자연히 충전소행
 BATT_LOW = 25
 BATT_CRIT = 10
-BATT_TOPUP = 90       # 유휴 로봇 짬충전(opportunistic) 임계 — 할 일 없으면 놀지 말고 충전소 대기
+BATT_TOPUP = 95       # 유휴 로봇 짬충전(opportunistic) 임계 — 미완충 유휴는 놀지 말고 충전소 대기(완충 후 5% 히스테리시스)
 BATT_EMERGENCY = 20   # (tow 미사용 시) 방전 제자리 회복 응급 잔량
 # battery["tow"]={"id":..,"home":cell} 지정 시 진짜 견인 로봇 모드:
 #   주둔(home, 충전지역 좌하단) → 방전 발생 시 출동(dispatch) → 인접 도달 시 탑재(haul, 월드에서 들어올림
