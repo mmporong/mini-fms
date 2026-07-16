@@ -353,7 +353,7 @@ def scenario_aging():
             sim.AGING = old
 
     off, on = worst(0), worst(3)
-    assert on < off, ("aging이 최장 배송을 못 줄임(기아 방지 실패)", off, on)
+    assert on <= off * 0.95, ("aging 개선폭 미달(<5% — 사실상 무력화)", off, on)   # 보수적 하한(정확값 과적합 금지)
     print(f"  [기아방지] 최장 배송 소요 aging끔 {off}tick → 켬 {on}tick (지연된 배송 우선 이동)")
 
 
@@ -428,6 +428,29 @@ def scenario_temp_closure_recovery():
         print(f"  [차단오탐방지] 임시폐쇄(60t)→개방 후 완주(회복) · 영구폐쇄→tick{bt}(≥CAP {C.BLOCK_CAP_TICKS}) 정직 차단")
     finally:
         C.STUCK_TICKS = old
+
+
+def scenario_varied_map():
+    """데모 구성(varied=True) 스모크 — 다양화 맵의 건전성: 완전 연결·물류지점 충분·분산 배치 유일.
+    데모(run.py)가 쓰는 분기가 자동검증 밖이던 사각(B-4) 봉합."""
+    from collections import deque as _dq
+    w, dep = M.warehouse(varied=True)
+    free = [(x, y) for y in range(w.height) for x in range(w.width) if w.is_free((x, y))]
+    seen, q = {free[0]}, _dq([free[0]])
+    while q:
+        x, y = q.popleft()
+        for n in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+            if w.is_free(n) and n not in seen:
+                seen.add(n)
+                q.append(n)
+    assert len(seen) == len(free), ("varied 맵 분단", len(seen), len(free))
+    pk, dp = M.stations(w)
+    assert len(pk) >= 14 and len(dp) > 0, ("물류지점 부족", len(pk), len(dp))
+    st = M.spread(w, 40)
+    assert len(set(st)) == 40, "분산 배치 중복"
+    w2, _ = M.warehouse(varied=True)
+    assert w.obstacles == w2.obstacles, "varied 맵 비결정론(seed 고정 위반)"
+    print(f"  [varied맵] 완전연결({len(free)}셀) · 픽업 {len(pk)}·dock {len(dp)} · 분산 40 유일 · 시드 결정론")
 
 
 def scenario_sla_zones():
@@ -509,6 +532,7 @@ def demo():
     scenario_blocked_queue() # 차단(개입) 큐(오탐0·되먹임 가드)
     scenario_temp_closure_recovery()  # 차단 오탐 방지(시간 캡: 임시폐쇄 회복·영구폐쇄 정직 차단)
     scenario_sla_zones()     # SLA/구역 지표(인과 2종·되먹임 가드)
+    scenario_varied_map()    # 데모 varied 맵 스모크(B-4 사각 봉합)
     scenario_nav_trace()     # 자동주행 결정 트레이스(ASPIRE식·원인→파생)
     scenario_crossing()      # (a) 정상 완주
     scenario_deadlock()      # (d) 교착→해소
