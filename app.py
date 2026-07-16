@@ -127,10 +127,10 @@ DASHBOARD_HTML = """<!doctype html>
   <div class="kpi" id="kpi"></div>
   <div class="bar" id="bar"></div>
   <div class="legend">
-   <span>로봇 색 = 배송 지연:</span>
+   <span>로봇 색(지연될수록 진함):</span>
    <span><i class="sw" style="background:#ffffff;border:1px solid #444c56"></i>방금</span>
-   <span><i class="sw" style="background:#f7c8c3"></i>지연</span>
-   <span><i class="sw" style="background:#f85149"></i>오래 지연</span>
+   <span><i class="sw" style="background:#3fb950"></i>픽업하러(→초록)</span>
+   <span><i class="sw" style="background:#f85149"></i>배송 중(→빨강)</span>
    <span><i class="sw" style="background:#6e7681"></i>유휴</span>
    <span><i class="sw" style="background:#484f58"></i>고장(X)</span>
    <span><i class="sw" style="background:#f0d060"></i>적재(금색 링)</span>
@@ -281,8 +281,9 @@ function draw(R, cur){
   let col;
   if(r.status==='down') col='#484f58';                                                                 // 고장=회색
   else if(r.task==null) col='#6e7681';                                                                 // 유휴(임무 없음)=회색
-  else { const t=Math.min(1,(r.age||0)/60);                                                            // 0=방금(흰) .. 1=오래지연(빨강)
-    col=`rgb(${255-Math.round(t*7)},${255-Math.round(t*174)},${255-Math.round(t*182)})`; }
+  else { const t=Math.min(1,(r.age||0)/60);                                                            // 흰(방금)→ 지연될수록 진해짐
+    col=r.carrying ? `rgb(${255-Math.round(t*7)},${255-Math.round(t*174)},${255-Math.round(t*182)})`   // 배송 중: 흰→빨강
+                   : `rgb(${255-Math.round(t*192)},${255-Math.round(t*70)},${255-Math.round(t*175)})`; } // 픽업하러: 흰→초록
   g.fillStyle=col; g.beginPath(); g.arc(X,Y,rad,0,7); g.fill();
   g.strokeStyle='#0b0e13'; g.lineWidth=1; g.stroke();                                                  // 경계선(인접 로봇 구분)
   if(r.carrying){ g.strokeStyle='#f0d060'; g.lineWidth=Math.max(2,cs*0.16); g.beginPath();             // 적재 중 = 굵은 금색 링(잘 보이게)
