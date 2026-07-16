@@ -75,11 +75,13 @@ def smoothed_oneway(world):
 def on_tick(tick, telem, world, tasks, log):
     stage = {t.id: t.stage for t in tasks}
     wr = {t["robot_id"]: t["metrics"].get("wait_reason", "none") for t in telem}
-    for r in world.robots:                                                   # 배송 경과시간 추적(반납 시 리셋)
+    for r in world.robots:                                                   # 레그 경과시간 추적(픽업하러/배송중 각각 리셋)
         if r.task is None:
             _TASK_START.pop(r.id, None)
-        elif _TASK_START.get(r.id, (None,))[0] != r.task:
-            _TASK_START[r.id] = (r.task, tick)                               # 새 임무 배정 → 시작 tick 기록
+        else:
+            leg = (r.task, stage.get(r.task))                               # 임무+단계 = 레그(픽업하러 vs 배송중)
+            if _TASK_START.get(r.id, (None,))[0] != leg:
+                _TASK_START[r.id] = (leg, tick)                             # 새 임무 or 픽업함(단계 전환) → 흰색부터 리셋
     snap = [{"id": r.id, "x": r.pos[0], "y": r.pos[1], "status": r.status, "task": r.task,
              "pr": r.priority,                                                # 기본 이동 우선순위(번호와 함께 표시)
              "eff": r.priority - sim.AGING * r.stuck_ticks,                   # 유효 우선순위(대기 누적=aging 반영)
