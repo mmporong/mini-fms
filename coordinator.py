@@ -9,7 +9,11 @@ import sim
 FAULT_TICKS = 12    # claim 미제출 이 tick 넘으면 고장 파생. > 최대 aging 대기(교착 해소 지연) 보장. ponytail knob
 RECOVER_TICKS = 12  # 고장 로봇을 이 tick 뒤 제자리 idle로 회복(towed→복귀, 정적 봉쇄 해제). ponytail knob
 STUCK_TICKS = 30    # 태스크 보유 로봇이 이 tick 목표거리 무개선(정지 or 진동)이면 태스크 재개방. > RECOVER_TICKS라 회복이 먼저
-MAX_REASSIGN = 3    # 재배분 이 횟수 초과하면 태스크를 '차단'(개입 필요)으로 플래그 — 도달불가 임무 무한루프 방지
+MAX_REASSIGN = 3    # churn 진단 임계(터미널 게이트 아님 — 터미널은 아래 시간 캡). >2배 누적 시 task_churn 로그
+# 터미널 '차단(개입 필요)' 승격 = 연속 도달불가 지속 >= BLOCK_CAP_TICKS일 때만.
+# ponytail knob — 관계식: 최대 정상 폐쇄 지속(run.py OBST close→open = 120tick) + 마진(재배분 1사이클 = STUCK_TICKS).
+# 교차파일 결합 주의: run.py의 폐쇄 지속을 늘리면 이 값도 그걸 초과하도록 함께 갱신할 것(폐쇄 지속 < CAP 불변).
+BLOCK_CAP_TICKS = 120 + STUCK_TICKS   # = 150
 
 
 @dataclass
@@ -159,6 +163,7 @@ def run_dynamic(world, tasks=None, task_stream=None, obstacle_events=None,
     task_stream, obstacle_events, faults, homes = task_stream or {}, obstacle_events or {}, faults or {}, homes or {}
     noclaim, log = {}, []
     down_since, best_dist, goal_at, stuck, reassigns = {}, {}, {}, {}, {}   # 회복·정체 재배분·차단 추적
+    unreach_since = {}   # (task_id, stage) → 연속 도달불가 시작 tick(시간 캡 터미널 판정용, 도달 가능 관측 시 리셋)
     delivered = blocked_total = 0                         # 연속 모드 누적 집계(완료 태스크는 pruning으로 제거)
     for tick in range(1, max_ticks + 1):
         if tick in task_stream:                          # 연속 임무 스폰
@@ -217,8 +222,22 @@ def run_dynamic(world, tasks=None, task_stream=None, obstacle_events=None,
             goal_at[r.id] = r.goal
             if stuck[r.id] >= STUCK_TICKS:
                 tid = r.task
-                reassigns[tid] = reassigns.get(tid, 0) + 1
-                newstage = "blocked" if reassigns[tid] > MAX_REASSIGN else "open"   # 반복 실패=차단(개입 필요)
+                reassigns[tid] = reassigns.get(tid, 0) + 1   # 진단용 카운터(터미널 게이트 아님)
+                # 터미널 '차단'은 시간 기반: 연속 도달불가 지속 >= BLOCK_CAP_TICKS일 때만(임시 폐쇄 오탐 방지).
+                # 신호원 = 기존 plan_robot 결과 재사용(추가 astar 0회): 결정점에서 status=="blocked" 또는
+                # path 없음 = 그 시점 도달불가(현재 goal 기준이라 레그별 판정이 자연 성립).
+                task_obj = next((t for t in tasks if t.id == tid), None)
+                leg = (tid, task_obj.stage if task_obj else "?")
+                unreachable = (r.status == "blocked") or (len(r.path) < 2 and r.pos != r.goal)
+                if unreachable:
+                    if unreach_since.get(leg) is None:
+                        unreach_since[leg] = tick             # 연속 도달불가 시작
+                    newstage = "blocked" if tick - unreach_since[leg] >= BLOCK_CAP_TICKS else "open"
+                else:
+                    unreach_since.pop(leg, None)              # 도달 가능(plan 성공 = 혼잡일 뿐) → 리셋, 계속 재시도
+                    newstage = "open"
+                    if reassigns[tid] > 2 * MAX_REASSIGN:     # churn 안전판: 진단 로그만(관측 전용, 터미널화 금지)
+                        log.append({"tick": tick, "type": "task_churn", "task": tid, "count": reassigns[tid]})
                 for t in tasks:
                     if t.robot == r.id and t.stage != "done":
                         t.stage, t.robot = newstage, None
@@ -252,6 +271,9 @@ def run_dynamic(world, tasks=None, task_stream=None, obstacle_events=None,
                     blocked_total += 1
                 else:
                     keep.append(t)
+                if t.stage in ("done", "blocked"):       # 종결 태스크의 도달불가 추적 정리(유계)
+                    unreach_since.pop((t.id, "topickup"), None)
+                    unreach_since.pop((t.id, "todropoff"), None)
             tasks = keep
         else:                                            # 스트림 모드: 전부 완결 시 조기종료(기존 동작)
             future = any(k > tick for k in task_stream)

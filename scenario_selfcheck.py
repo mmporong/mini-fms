@@ -17,8 +17,8 @@ GOLDEN = {
     "crossing": "830e0b604499c7c7430fd1eb8df4b3bb22445c316ed19a2bd01c6e6c2cca7b63",
     "deadlock": "f228d7fc32cdf3c6c7e2958b53e5e5ec2ec64cc714e347218565c96ace2a7f63",
     "scale": "b76eb13ee22a6288eabd9239528396ce23db1f4799fbb19d76698f8ed62577f7",
-    "continuous": "fef6ef80dee3956b7199105da63d314b14436276274575a5c47383dbe1d6f7de",
-    "gridlock": "62b585f63af3391b33e608fc728b2a455c452654b0a03bacb2c2d6f403ea70f3",
+    "continuous": "671260cc81501f7497259e6745beb5b388769dcc35bdc9cf1049938e270c95fa",   # 시간캡(M1) 재동결: 배송107 유지
+    "gridlock": "906936df3f43c064b197de151e5ebab19150436bdb39c40b309074345779716a",     # 시간캡(M1) 재동결: 완료63→72·오탐차단 10건 회복
 }
 
 
@@ -404,6 +404,32 @@ def scenario_blocked_queue():
     print(f"  [차단큐] 개입 큐 {len(queue)}건 전부 도달불가(물류지점 폐쇄)=오탐0 · 되먹임 가드(tasks 불변)")
 
 
+def scenario_temp_closure_recovery():
+    """차단 오탐 방지(시간 기반 캡) — 임시 폐쇄로 도달불가였던 태스크는 개방 후 회복(완주),
+    영구 폐쇄는 CAP 초과 시 여전히 차단(터미널). 원인주입(폐쇄)→파생(회복/차단)→결과 기반 assert.
+    회귀 근거: 횟수 기반(reassigns>MAX) 터미널은 개방 후 도달 가능해도 영구 차단하는 오탐(RED 재현됨)."""
+    old = C.STUCK_TICKS
+    C.STUCK_TICKS = 10                                     # 재배분 주기 압축(판별창 확대: 폐쇄 60t << CAP 150)
+    try:
+        w = M.from_ascii(["........"] * 8)
+        mk = lambda: (sim.Robot("r0", (0, 0), (0, 0)), sim.Robot("r1", (7, 0), (7, 0)))
+        # ① 임시 폐쇄(60t) → 개방 후 완주(오탐 차단 없음)
+        _, tasks, log, _ = C.run_dynamic(sim.World(wmap=w, robots=mk()), tasks=[C.Task("T", (7, 7), (0, 7))],
+                                         obstacle_events={5: ("close", [(7, 7)]), 65: ("open", [(7, 7)])},
+                                         max_ticks=400)
+        assert tasks[0].stage == "done", ("임시 폐쇄 후 미회복(오탐 차단)", tasks[0].stage)
+        assert len([e for e in log if e["type"] == "task_reassign"]) >= 3, "재배분 리트라이 미작동"
+        # ② 영구 폐쇄 → CAP(BLOCK_CAP_TICKS) 초과 시 터미널 차단 유지(진짜 도달불가는 정직하게 차단)
+        _, tasks2, log2, _ = C.run_dynamic(sim.World(wmap=w, robots=mk()), tasks=[C.Task("U", (7, 7), (0, 7))],
+                                           obstacle_events={5: ("close", [(7, 7)])}, max_ticks=400)
+        assert tasks2[0].stage == "blocked", ("영구 도달불가인데 차단 안 됨", tasks2[0].stage)
+        bt = next(e["tick"] for e in log2 if e["type"] == "task_blocked")
+        assert bt >= C.BLOCK_CAP_TICKS, ("CAP 전에 조기 차단(시간 캡 미작동)", bt)
+        print(f"  [차단오탐방지] 임시폐쇄(60t)→개방 후 완주(회복) · 영구폐쇄→tick{bt}(≥CAP {C.BLOCK_CAP_TICKS}) 정직 차단")
+    finally:
+        C.STUCK_TICKS = old
+
+
 def scenario_nav_trace():
     """자동주행 결정 트레이스(ASPIRE식) — sim.step의 주행 결정(재경로·양보·교착)을 버리지 않고 구조화 기록.
     원인주입(통로 폐쇄→혼잡)→파생(nav_reroute 등)→구조화 레코드 assert + 무혼잡 대조군 비교(혼잡이 원인임 실증)."""
@@ -441,6 +467,7 @@ def demo():
     scenario_oneway()        # one-way 관측(corridor_locks·wait_reason)
     scenario_hysteresis()    # 방향 hysteresis(smooth_locks)
     scenario_blocked_queue() # 차단(개입) 큐(오탐0·되먹임 가드)
+    scenario_temp_closure_recovery()  # 차단 오탐 방지(시간 캡: 임시폐쇄 회복·영구폐쇄 정직 차단)
     scenario_nav_trace()     # 자동주행 결정 트레이스(ASPIRE식·원인→파생)
     scenario_crossing()      # (a) 정상 완주
     scenario_deadlock()      # (d) 교착→해소
