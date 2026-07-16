@@ -114,7 +114,7 @@ def on_tick(tick, telem, world, tasks, log):
         "events": [{"tick": e["tick"], "type": e["type"], "robot": e.get("robot"), "task": e.get("task")}
                    for e in log[-16:]],
     }
-    time.sleep(0.12 / max(0.25, getattr(app_module, "SPEED", 2.0)))   # 속도 배율(기본 2배, 대시보드서 조절)
+    time.sleep(0.12 / max(0.25, getattr(app_module, "SPEED", 1.0)))   # 속도 배율(기본 1배, 대시보드서 0.5~8× 조절)
 
 
 if __name__ == "__main__":

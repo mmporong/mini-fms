@@ -50,7 +50,7 @@ def get_map():
 STATE = {"robots": [], "dyn_blocked": [], "oneway": [], "blocked_queue": [], "nav_trace": [], "metrics": {}, "events": []}
 
 
-SPEED = 2.0   # 실행 속도 배율(기본 2배) — run.py on_tick이 읽어 sleep 조절
+SPEED = 1.0   # 실행 속도 배율(기본 1배) — run.py on_tick이 읽어 sleep 조절
 
 
 @app.get("/speed")
@@ -109,9 +109,12 @@ DASHBOARD_HTML = """<!doctype html>
 <div class="sub"><span id="dot" class="dot off"></span><span id="status">연결 대기…</span> · 폴링 250ms · DB <span id="db">0</span>행</div>
 <div class="alert" id="alert"></div>
 <div class="ctrl">
- <span>속도</span><span id="spd">2×</span>
- <button onclick="setSpeed(1)">1×</button><button onclick="setSpeed(2)">2×</button>
- <button onclick="setSpeed(4)">4×</button><button onclick="setSpeed(8)">8×</button>
+ <span>속도</span><span id="spd">1×</span>
+ <button class="spd" data-m="0.5" onclick="setSpeed(0.5)">0.5×</button>
+ <button class="spd" data-m="1" onclick="setSpeed(1)">1×</button>
+ <button class="spd" data-m="2" onclick="setSpeed(2)">2×</button>
+ <button class="spd" data-m="4" onclick="setSpeed(4)">4×</button>
+ <button class="spd" data-m="8" onclick="setSpeed(8)">8×</button>
  <span style="margin-left:12px">라벨</span>
  <button id="lm0" onclick="setLabel(0)">번호</button>
  <button id="lm1" onclick="setLabel(1)">번호+우선순위</button>
@@ -169,10 +172,13 @@ function sizeCanvas(){                  // 고해상도(크리스프) — 표시
  const w=Math.round((c.clientWidth||900)*dpr); c.width=w; c.height=Math.round(w*MAP.height/MAP.width);
 }
 async function setSpeed(m){ try{ const s=await (await fetch('/speed?mult='+m)).json();
- document.getElementById('spd').textContent=s.speed+'×'; }catch(e){} }
+ document.getElementById('spd').textContent=s.speed+'×';
+ document.querySelectorAll('.spd').forEach(b=>b.className=(parseFloat(b.dataset.m)===s.speed?'spd on':'spd')); }catch(e){} }
 function setLabel(m){ LABELMODE=m; for(let i=0;i<3;i++) document.getElementById('lm'+i).className=(i===m?'on':''); }
 
-async function loadMap(){ MAP = await (await fetch('/map')).json(); sizeCanvas(); setLabel(0); }
+async function loadMap(){ MAP = await (await fetch('/map')).json(); sizeCanvas(); setLabel(0);
+ try{ const s=await (await fetch('/speed')).json(); document.getElementById('spd').textContent=s.speed+'×';   // 현재 속도 하이라이트(리셋 없이)
+  document.querySelectorAll('.spd').forEach(b=>b.className=(parseFloat(b.dataset.m)===s.speed?'spd on':'spd')); }catch(e){} }
 window.addEventListener('resize', sizeCanvas);
 
 async function poll(){
