@@ -119,11 +119,13 @@ def advance(world, tasks):
 
 
 def detect_and_heal(world, tasks, noclaim):
-    """claim 미제출 streak≥FAULT_TICKS인 활성작업 로봇 → down 파생 + 작업 재개방(재배분). 반환: world', downed."""
+    """claim 미제출 streak≥FAULT_TICKS인 로봇 → down 파생(+보유 작업 재개방). 반환: world', downed.
+    유휴(무임무) 로봇도 침묵하면 down — 침묵=이상은 임무 유무와 무관(유휴 좀비 사각 봉합: 고장 주입이
+    유휴/충전行 로봇을 맞추면 이전엔 파생·회복 없이 영구 정지했음)."""
     robots = {r.id: r for r in world.robots}
     downed = []
     for r in world.robots:
-        if r.status == "down" or r.task is None:
+        if r.status == "down":
             continue
         if noclaim.get(r.id, 0) >= FAULT_TICKS:
             robots[r.id] = replace(r, status="down")         # coordinator가 파생(주입한 라벨 아님)
@@ -276,8 +278,10 @@ def run_dynamic(world, tasks=None, task_stream=None, obstacle_events=None,
                                      goal=robs[rid].pos, path=(), stuck_ticks=0)
                 down_since.pop(rid, None)
                 log.append({"tick": tick, "type": "recovered", "robot": rid})
-                if battery and batt.get(rid, 100) <= 0:   # 방전 견인 회복 = 현장 응급 배터리 교체 → LOW라 곧 충전소행
-                    batt[rid] = BATT_EMERGENCY
+                if battery:
+                    charging.pop(rid, None)               # 잔존 충전 예약 해제(LOW면 다음 tick 재파견)
+                    if batt.get(rid, 100) <= 0:           # 방전 견인 회복 = 현장 응급 배터리 교체
+                        batt[rid] = BATT_EMERGENCY
         for r in list(robs.values()):                 # ② 정체 태스크 재배분: 목표거리 무개선(정지 or 진동) 감지
             if r.task is None or r.status in ("down", "arrived") or not r.alive:
                 stuck[r.id] = 0

@@ -16,8 +16,8 @@ import coordinator as C
 GOLDEN = {
     "crossing": "830e0b604499c7c7430fd1eb8df4b3bb22445c316ed19a2bd01c6e6c2cca7b63",
     "deadlock": "f228d7fc32cdf3c6c7e2958b53e5e5ec2ec64cc714e347218565c96ace2a7f63",
-    "scale": "b76eb13ee22a6288eabd9239528396ce23db1f4799fbb19d76698f8ed62577f7",
-    "continuous": "671260cc81501f7497259e6745beb5b388769dcc35bdc9cf1049938e270c95fa",   # 시간캡(M1) 재동결: 배송107 유지
+    "scale": "7709bf2092528c2264094678c52b026330d941baadd5d812662cf05f16aa2084",       # 유휴좀비 봉합 재동결: 90/90 유지·tick 270→245
+    "continuous": "c65277a2b8551f2642011279bfcaed94479adb4da2096b5d36f92c010dbdf48c",   # 유휴좀비 봉합 재동결: 배송107 유지
     "gridlock": "906936df3f43c064b197de151e5ebab19150436bdb39c40b309074345779716a",     # 시간캡(M1) 재동결: 완료63→72·오탐차단 10건 회복
 }
 
@@ -493,6 +493,20 @@ def scenario_sla_zones():
     print(f"  [SLA·구역] 폐쇄 주입 p95 {p95_base}→{p95_closed}(상승=원인 추적) · 우하 집중 스폰 구역완료 {zd} · 되먹임 0")
 
 
+def scenario_idle_fault():
+    """유휴 좀비 봉합 — '임무 없는' 로봇에 고장 주입(alive=False)해도 침묵에서 down 파생·회복돼야.
+    회귀 근거: 이전엔 detect_and_heal이 task None을 스킵해 유휴/충전行 로봇이 status=moving인 채
+    영구 정지(대시보드에 고장 표시도 안 되는 좀비 — 실사용 스크린샷 12·21번 재현)."""
+    w = M.from_ascii(["........"] * 8)
+    rb = (sim.Robot("r0", (4, 4), (4, 4)), sim.Robot("r1", (0, 0), (0, 0)))
+    spawn = C.package_spawner([(6, 6)], [(1, 1)], every=100, per=1)   # r0는 유휴로 남게
+    _, _, log, _ = C.run_dynamic(sim.World(wmap=w, robots=rb), spawn=spawn, faults={10: "r0"}, max_ticks=120)
+    ev = lambda t: [e for e in log if e["type"] == t and e.get("robot") == "r0"]
+    assert ev("fault_derived"), "유휴 로봇 고장이 down 파생 안 됨(좀비 회귀)"
+    assert ev("recovered"), "유휴 로봇 고장이 회복 안 됨(영구 정지 회귀)"
+    print(f"  [유휴좀비] 무임무 로봇 고장 → down 파생 t{ev('fault_derived')[0]['tick']} → 회복 t{ev('recovered')[0]['tick']} (영구 정지 봉합)")
+
+
 def scenario_battery():
     """배터리+견인 로봇(opt-in) — ①LOW 로봇 충전소行→완충→복귀 ②방전=에러 송신(battery_dead)+정지(down)
     ③견인 로봇이 출동→탑재(월드에서 들어올림=충돌0 무충돌)→충전소 하역→0%부터 충전→완충, tow 주둔 복귀
@@ -560,6 +574,7 @@ def demo():
     scenario_temp_closure_recovery()  # 차단 오탐 방지(시간 캡: 임시폐쇄 회복·영구폐쇄 정직 차단)
     scenario_sla_zones()     # SLA/구역 지표(인과 2종·되먹임 가드)
     scenario_varied_map()    # 데모 varied 맵 스모크(B-4 사각 봉합)
+    scenario_idle_fault()    # 유휴 좀비 봉합(무임무 고장도 down 파생·회복)
     scenario_battery()       # 배터리 사이클(충전行·방전 에러·견인·완충, opt-in)
     scenario_nav_trace()     # 자동주행 결정 트레이스(ASPIRE식·원인→파생)
     scenario_crossing()      # (a) 정상 완주
