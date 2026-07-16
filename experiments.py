@@ -68,9 +68,6 @@ def scale_curve(ns=(10, 20, 40, 70, 100)):
     return rows
 
 
-ABL_KEYS = ("baseline", "no aging", "no one-way", "no congestion cost")   # 차트 라벨(영문 — 글꼴 호환)
-
-
 def ablation():
     """정책 ablation — 기본(전부 켬) vs aging 끔 vs one-way 끔 vs 혼잡비용 끔. N=40 고정.
     토글은 모듈 상수/함수 대체 후 finally 원복(코어 파일 무변경, 실험 스코프 한정)."""
