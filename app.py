@@ -87,7 +87,8 @@ DASHBOARD_HTML = """<!doctype html>
  h1{font-size:21px;margin:0 0 4px} .sub{color:#8b949e;font-size:13px;margin-bottom:14px}
  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#3fb950;margin-right:6px}
  .dot.off{background:#f85149}
- .alert{background:#3d1416;border:1px solid #f85149;color:#ffb3b3;border-radius:6px;padding:8px 14px;margin-bottom:12px;font-size:14px;display:none}
+ .alert{background:#3d1416;border:1px solid #f85149;color:#ffb3b3;border-radius:6px;padding:8px 14px;margin-bottom:12px;font-size:14px;
+   visibility:hidden;min-height:1.4em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}  /* 자리 상시 예약 — 표시/숨김에 레이아웃 불변 */
  .wrap{display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap}
  #viz{width:48%;flex:0 0 48%;height:auto;display:block}
  canvas{background:#0b0e13;border:1px solid #21262d;border-radius:8px;max-width:100%}
@@ -251,11 +252,11 @@ async function poll(){
   // 경보(방전 우선 표시)
   const dead=R.filter(r=>r.status==='down'&&r.batt<=0).map(r=>r.id);
   const downs=R.filter(r=>r.status==='down'&&r.batt>0).map(r=>r.id), al=document.getElementById('alert');
-  if(dead.length||downs.length){ al.style.display='block';
+  if(dead.length||downs.length){ al.style.visibility='visible';
     al.textContent=(dead.length?'🔋 배터리 방전 정지(에러): '+dead.join(', ')+' — 견인 후 응급충전 예정':'')
       +(dead.length&&downs.length?'  |  ':'')
       +(downs.length?'🔴 로봇 고장: '+downs.join(', ')+' — 재배분 후 회복(towed)':''); }
-  else al.style.display='none';
+  else{ al.style.visibility='hidden'; al.textContent=''; }
   // 그리기는 animate()의 requestAnimationFrame 루프가 담당(부드러운 보간)
  }catch(e){ document.getElementById('dot').className='dot off'; document.getElementById('status').textContent='서버 끊김'; }
 }
