@@ -142,7 +142,7 @@ def on_tick(tick, telem, world, tasks, log):
         "dyn_blocked": [list(c) for c in world.dyn_blocked],
         "oneway": smoothed_oneway(world),      # 경합 통로 방향(hysteresis 평활 — 깜빡임 억제)
         "blocked_queue": list(_BLOCKED_SEEN.values())[-20:],   # 개입 필요 태스크(도달불가)
-        "nav_trace": list(_NAV_TRACE)[-30:],   # 최근 주행 결정(전체는 /trace.jsonl)
+        "nav_trace": list(_NAV_TRACE),         # 주행 결정 전체(≤400) — /trace.jsonl flight recorder가 전량 서빙
         "metrics": {"delivered": delivered, "active": len(tasks),
                     "carrying": sum(1 for s in snap if s["carrying"]),
                     "throughput": round(delivered / max(1, tick), 3),
