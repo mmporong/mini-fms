@@ -6,6 +6,12 @@
 > A deterministic multi-agent path coordination (MAPF-style) simulator with a live monitoring dashboard.
 > Grid-abstracted warehouse fleet: A\* planning, collision/deadlock resolution, task allocation, fault self-healing, and observability — all as pure, seed-deterministic functions guarded by a frame-level golden regression gate.
 
+로보틱스 스택에서 이 프로젝트의 자리는 **sim-to-real 검증 파이프라인의 조율/오케스트레이션 층**이다 — 경로계획·충돌회피·작업할당·fleet 상태관리를 GUI 없이(headless) 스크립트만으로 실행·검증·회귀 테스트할 수 있게 만드는 것이 목적이다.
+
+![demo](assets/demo.gif)
+
+*40대 연속 물류 · 초록=임무 수행 중 · 회색=유휴 · 황토=rack(픽업) · 청록=dock(배송). `python tools/make_gif.py`로 재생성.*
+
 ---
 
 ## 무엇인가 (정직한 범위)
@@ -26,6 +32,8 @@
 | fleet 루프 + 작업할당(`coordinator`) | ROS2 **Open-RMF** fleet adapter |
 | soft one-way 통로 방향잠금 | 창고 AMR 일방통행 트래픽 관리 |
 | claim-heartbeat 고장 파생 | fleet 상태 모니터링(단, 실제는 벽시계·타임아웃) |
+| 골든-궤적 회귀 게이트 + 셀프체크 | CI의 headless 시뮬 회귀 테스트(검증 자동화) |
+| 결정 트레이스(`/trace.jsonl`) | 주행 로그 기록·사후 분석(rosbag 기록·재생의 역할) |
 
 ## 핵심 기능
 
@@ -36,7 +44,9 @@
 - **고장 자가치유**: claim-heartbeat로 침묵 로봇을 down 파생 → 태스크 재배분 → 회복(towed). 도달불가 태스크는 "개입 필요"로 정직하게 차단.
 - **관제 대시보드**: 2D 격자 렌더 · 통로 방향 화살표 · 차단 개입큐 · 처리량 시계열 · 로봇 드릴다운 · **자동주행 결정 트레이스(flight recorder, `/trace.jsonl`)**.
 
-## 엔지니어링 규율
+## 검증 방법론
+
+전부 headless다 — GUI 클릭 없이 스크립트만으로 전 시나리오가 실행·검증되고, 코어를 리팩터링하면 회귀 게이트가 즉시 잡는다.
 
 - **순수함수 + 시드 결정론**: `step(world) → (world', telemetry, events)`, 입력 불변. 텔레메트리는 출력이지 되먹임 아님.
 - **골든-궤적 회귀 게이트**: 핵심 시나리오의 tick별 `(id,pos)` 시퀀스를 SHA256으로 동결 → 코어 리팩터가 궤적을 바꾸면 즉시 감지(`ticks==ticks2`가 못 잡는 경로 드리프트까지).
@@ -56,6 +66,14 @@ python test_e2e.py              # HTTP 파이프라인 + 드릴다운
 ```
 
 대시보드 상단 컨트롤: 실행 속도(1/2/4/8×), 로봇 라벨(번호/우선순위), 로봇 클릭 → 상세 드릴다운.
+
+셀프체크 기대 출력(발췌 — 2026-07-22 실행):
+
+```
+[현업규모] 40대·90임무 · 충돌 0 · 완료 90/90 차단 0 · 회복 4건 · 처리량 0.367 · 245tick(정상종료)
+[연속물류] 끝없이 운영(400tick) · 배송 107건 · 최대 적재 29대 · 백로그 최대 37(유한) · 정점·간선 충돌 0
+시나리오 셀프체크 통과 — (a)정상 (b)고장자가치유 (c)재경로 (d)교착해소 + 교착심화·기아방지·긴급·동적세계 + 현업규모 + 연속물류 + 충돌0
+```
 
 ## 파일 구성
 
